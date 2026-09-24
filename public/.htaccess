@@ -1,0 +1,19 @@
+# public/.htaccess
+# ─────────────────────────────────────────────────────────────────────────────
+# URL Rewrite untuk Apache/Nginx
+# Mengarahkan semua request ke public/index.php (Front Controller pattern)
+#
+# Digunakan jika deploy ke Apache dengan mod_rewrite.
+# Untuk development, gunakan: php -S localhost:PORT -t public
+# (php built-in server sudah otomatis route semua ke index.php)
+# ─────────────────────────────────────────────────────────────────────────────
+
+Options -MultiViews
+RewriteEngine On
+
+# Jika file atau direktori yang diminta sudah ada, sajikan langsung
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+
+# Semua request lainnya diteruskan ke index.php
+RewriteRule ^ index.php [QSA,L]

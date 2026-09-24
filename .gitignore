@@ -1,0 +1,17 @@
+# Environment — JANGAN pernah di-commit
+.env
+
+# Dependency (jika suatu hari pakai Composer)
+/vendor/
+
+# Log files
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
