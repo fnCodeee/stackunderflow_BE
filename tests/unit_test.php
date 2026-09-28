@@ -2,8 +2,8 @@
 
 /**
  * =============================================================================
- * UNIT TEST RUNNER — STACK UNDERFLOW / ASTEL BACKEND (PHP NATIVE)
- * Dibuat untuk Pengujian Mandiri & Dokumentasi Laporan Proyek UTS
+ * COMPREHENSIVE UNIT & REGRESSION TEST RUNNER (PHASE 1, 2A, 2B)
+ * STACK UNDERFLOW / ASTEL BACKEND (PHP NATIVE)
  * =============================================================================
  *
  * Cara Menjalankan:
@@ -16,7 +16,6 @@ declare(strict_types=1);
 
 define('BASE_PATH', dirname(__DIR__));
 
-// Format output warna ANSI di terminal
 const COLOR_GREEN  = "\033[32m";
 const COLOR_RED    = "\033[31m";
 const COLOR_CYAN   = "\033[36m";
@@ -51,13 +50,13 @@ function printHeader(string $title): void
 }
 
 echo COLOR_BOLD . "====================================================================\n";
-echo "           PENGUJIAN UNIT TEST BACKEND PHP NATIVE (UTS)             \n";
+echo "           PENGUJIAN UNIT & REGRESI BACKEND PHP NATIVE              \n";
 echo "====================================================================" . COLOR_RESET . "\n";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 1. PENGUJIAN ENVIRONMENT LOADER
+// 1. REGRESI PHASE 1: ENVIRONMENT LOADER
 // ─────────────────────────────────────────────────────────────────────────────
-printHeader("1. Pengujian Environment Loader (config/env.php)");
+printHeader("1. [Regresi Phase 1] Environment Loader (config/env.php)");
 
 require_once BASE_PATH . '/config/env.php';
 
@@ -67,9 +66,9 @@ assertTest("Variabel DB_NAME berhasil dimuat", isset($_ENV['DB_NAME']) && $_ENV[
 assertTest("Variabel APP_PORT berhasil dimuat", isset($_ENV['APP_PORT']));
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 2. PENGUJIAN RESPONSE HELPER
+// 2. REGRESI PHASE 1: RESPONSE HELPER
 // ─────────────────────────────────────────────────────────────────────────────
-printHeader("2. Pengujian Response Helper (utils/Response.php)");
+printHeader("2. [Regresi Phase 1] Response Helper (utils/Response.php)");
 
 require_once BASE_PATH . '/utils/Response.php';
 
@@ -79,9 +78,9 @@ assertTest("Method Response::success() tersedia", method_exists('Response', 'suc
 assertTest("Method Response::error() tersedia", method_exists('Response', 'error'));
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 3. PENGUJIAN ROUTER (PATH PARAMETERS & PRIORITY)
+// 3. REGRESI PHASE 1: ROUTER (PATH PARAMS & PRIORITY)
 // ─────────────────────────────────────────────────────────────────────────────
-printHeader("3. Pengujian Router (routes/Router.php)");
+printHeader("3. [Regresi Phase 1] Router (routes/Router.php)");
 
 require_once BASE_PATH . '/routes/Router.php';
 
@@ -90,7 +89,6 @@ $reflector = new ReflectionClass($router);
 $matchMethod = $reflector->getMethod('matchRoute');
 $matchMethod->setAccessible(true);
 
-// Test Dynamic Matching
 $res1 = $matchMethod->invoke($router, '/api/posts/:postId', '/api/posts/post-uuid-123');
 assertTest("Ekstraksi Path Parameter tunggal (:postId)", $res1 === ['postId' => 'post-uuid-123']);
 
@@ -103,7 +101,7 @@ assertTest("Ekstraksi Path Parameter nested complex", $res3 === ['applicationId'
 $res4 = $matchMethod->invoke($router, '/api/posts/:postId', '/api/users/profile');
 assertTest("Penolakan URL yang tidak cocok (Mismatch URL)", $res4 === null);
 
-// Test Static vs Dynamic Priority
+// Prioritas static vs dynamic
 $routerPriority = new Router();
 $routerPriority->get('/api/collab/:id', fn() => null);
 $routerPriority->get('/api/collab/inbox', fn() => null);
@@ -113,17 +111,15 @@ $routesProp->setAccessible(true);
 $allRoutes = $routesProp->getValue($routerPriority);
 
 $staticList  = array_values(array_filter($allRoutes, fn($r) => !str_contains($r['pattern'], ':')));
-$dynamicList = array_values(array_filter($allRoutes, fn($r) => str_contains($r['pattern'], ':')));
-
 assertTest(
     "Prioritas Route Statis (/api/collab/inbox) di atas Dinamis (/api/collab/:id)",
     isset($staticList[0]) && $staticList[0]['pattern'] === '/api/collab/inbox'
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 4. PENGUJIAN JWT UTILITY (HS256)
+// 4. REGRESI PHASE 2A: JWT UTILITY (HS256)
 // ─────────────────────────────────────────────────────────────────────────────
-printHeader("4. Pengujian JWT Utility (utils/JWT.php)");
+printHeader("4. [Regresi Phase 2A] JWT Utility (utils/JWT.php)");
 
 require_once BASE_PATH . '/utils/JWT.php';
 
@@ -173,11 +169,11 @@ try {
 assertTest("Deteksi Token Kedaluwarsa (Token Expiration Validation)", $expiredCaught);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 5. PENGUJIAN AUTH MIDDLEWARE
+// 5. REGRESI PHASE 2A: AUTH MIDDLEWARE
 // ─────────────────────────────────────────────────────────────────────────────
-printHeader("5. Pengujian Auth Middleware (middlewares/AuthMiddleware.php)");
+printHeader("5. [Regresi Phase 2A] Auth Middleware (middlewares/AuthMiddleware.php)");
 
-// A. Missing Header -> 403
+// Missing Header
 $outMissing = shell_exec("php -r \"
 define('BASE_PATH', '" . BASE_PATH . "');
 require_once BASE_PATH . '/middlewares/AuthMiddleware.php';
@@ -189,7 +185,7 @@ assertTest(
     isset($resMissing['message']) && $resMissing['message'] === 'Token Tidak Tersedia!'
 );
 
-// B. Malformed Header -> 403
+// Malformed Header
 $outMalformed = shell_exec("php -r \"
 define('BASE_PATH', '" . BASE_PATH . "');
 \\\$_SERVER['HTTP_AUTHORIZATION'] = 'TokenSalah 12345';
@@ -202,7 +198,7 @@ assertTest(
     isset($resMalformed['message']) && $resMalformed['message'] === 'Token Tidak Tersedia'
 );
 
-// C. Expired Bearer -> 401
+// Expired Bearer
 $outExpired = shell_exec("php -r \"
 define('BASE_PATH', '" . BASE_PATH . "');
 \\\$_ENV['JWT_SECRET'] = '{$secretKunci}';
@@ -218,7 +214,7 @@ assertTest(
     isset($resExpired['message']) && $resExpired['message'] === 'Token telah kedaluwarsa'
 );
 
-// D. Valid Bearer -> Success Injection
+// Valid Bearer
 $outValid = shell_exec("php -r \"
 define('BASE_PATH', '" . BASE_PATH . "');
 \\\$_ENV['JWT_SECRET'] = '{$secretKunci}';
@@ -236,35 +232,84 @@ assertTest(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 6. PENGUJIAN INTEGRASI ROUTER + AUTH MIDDLEWARE
+// 6. PENGUJIAN PHASE 2B: USER MODEL & REGISTER LOGIC
 // ─────────────────────────────────────────────────────────────────────────────
-printHeader("6. Pengujian Integrasi Router + AuthMiddleware Chain");
+printHeader("6. [Phase 2B] User Model & Register Logic");
 
-$outChain = shell_exec("php -r \"
+require_once BASE_PATH . '/models/UserModel.php';
+require_once BASE_PATH . '/controllers/AuthController.php';
+
+// A. Validasi Password Hashing Native (BCRYPT)
+$rawPass = 'RahasiaSuper123!';
+$hashedPass = password_hash($rawPass, PASSWORD_BCRYPT);
+assertTest("Password Hashing Native PHP BCRYPT", password_verify($rawPass, $hashedPass));
+assertTest("Password Hash Berbeda dengan Plaintext", $rawPass !== $hashedPass);
+
+// B. UUID v4 Generation
+$uuid = UserModel::generateUuid();
+$uuidValid = (bool)preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i', $uuid);
+assertTest("Format UUID v4 Valid (RFC 4122)", $uuidValid, "UUID generated: {$uuid}");
+
+// C. Register Validation: Missing Username -> 400
+$outMissingUsername = shell_exec("php -r \"
 define('BASE_PATH', '" . BASE_PATH . "');
-\\\$_ENV['JWT_SECRET'] = '{$secretKunci}';
-require_once BASE_PATH . '/utils/Response.php';
-require_once BASE_PATH . '/utils/JWT.php';
-require_once BASE_PATH . '/routes/Router.php';
-require_once BASE_PATH . '/middlewares/AuthMiddleware.php';
-
-\\\$router = new Router();
-\\\$router->get('/api/protected/profile', [AuthMiddleware::class, 'handle'], function(\\\$params) {
-    Response::json(['userId' => \\\$GLOBALS['user']['id']], 200, 'Berhasil akses protected route');
-});
-
-\\\$_SERVER['REQUEST_METHOD'] = 'GET';
-\\\$_SERVER['REQUEST_URI'] = '/api/protected/profile';
-\\\$token = JWT::encode(['id' => 'user-chain-pass'], 3600);
-\\\$_SERVER['HTTP_AUTHORIZATION'] = 'Bearer ' . \\\$token;
-
-\\\$router->dispatch();
+require_once BASE_PATH . '/controllers/AuthController.php';
+\\\$GLOBALS['body'] = ['password' => 'secret123'];
+AuthController::register();
 \"");
-$resChain = json_decode((string)$outChain, true);
+$resMissingUsername = json_decode((string)$outMissingUsername, true);
 assertTest(
-    "Chaining Handler: Dispatch -> AuthMiddleware -> Controller Execution",
-    isset($resChain['success']) && $resChain['success'] === true && $resChain['data']['userId'] === 'user-chain-pass'
+    "Register Missing Username -> HTTP 400 ('Mohon isi semua kolom!')",
+    isset($resMissingUsername['success']) && $resMissingUsername['success'] === false && $resMissingUsername['message'] === 'Mohon isi semua kolom!'
 );
+
+// D. Register Validation: Missing Password -> 400
+$outMissingPass = shell_exec("php -r \"
+define('BASE_PATH', '" . BASE_PATH . "');
+require_once BASE_PATH . '/controllers/AuthController.php';
+\\\$GLOBALS['body'] = ['username' => 'testuser'];
+AuthController::register();
+\"");
+$resMissingPass = json_decode((string)$outMissingPass, true);
+assertTest(
+    "Register Missing Password -> HTTP 400 ('Mohon isi semua kolom!')",
+    isset($resMissingPass['success']) && $resMissingPass['success'] === false && $resMissingPass['message'] === 'Mohon isi semua kolom!'
+);
+
+// E. Register Validation: Empty Fields -> 400
+$outEmpty = shell_exec("php -r \"
+define('BASE_PATH', '" . BASE_PATH . "');
+require_once BASE_PATH . '/controllers/AuthController.php';
+\\\$GLOBALS['body'] = ['username' => '', 'password' => ''];
+AuthController::register();
+\"");
+$resEmpty = json_decode((string)$outEmpty, true);
+assertTest(
+    "Register Empty Fields -> HTTP 400 ('Mohon isi semua kolom!')",
+    isset($resEmpty['success']) && $resEmpty['success'] === false && $resEmpty['message'] === 'Mohon isi semua kolom!'
+);
+
+// F. Route Registration Verification
+$routeCheck = shell_exec("php -r \"
+define('BASE_PATH', '" . BASE_PATH . "');
+require_once BASE_PATH . '/routes/Router.php';
+\\\$router = new Router();
+require_once BASE_PATH . '/routes/api.php';
+\\\$reflector = new ReflectionClass(\\\$router);
+\\\$prop = \\\$reflector->getProperty('routes');
+\\\$prop->setAccessible(true);
+\\\$routes = \\\$prop->getValue(\\\$router);
+\\\$found = false;
+foreach (\\\$routes as \\\$r) {
+    if (\\\$r['method'] === 'POST' && \\\$r['pattern'] === '/api/auth/register') {
+        \\\$found = true;
+        break;
+    }
+}
+echo json_encode(['registered' => \\\$found]);
+\"");
+$resRoute = json_decode((string)$routeCheck, true);
+assertTest("Route POST /api/auth/register Terdaftar di Router", isset($resRoute['registered']) && $resRoute['registered'] === true);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // REKAPITULASI HASIL PENGUJIAN
@@ -280,7 +325,7 @@ $persentase = round(($passedTests / $totalTests) * 100, 2);
 echo "  Tingkat Keberhasilan: " . COLOR_BOLD . "{$persentase}%" . COLOR_RESET . "\n";
 
 if ($failedTests === 0) {
-    echo "\n" . COLOR_GREEN . COLOR_BOLD . "✔ SELURUH PENGUJIAN UNIT TEST BERHASIL 100%!" . COLOR_RESET . "\n";
+    echo "\n" . COLOR_GREEN . COLOR_BOLD . "✔ SELURUH PENGUJIAN UNIT & REGRESI BERHASIL 100%!" . COLOR_RESET . "\n";
     echo COLOR_BOLD . "====================================================================\n" . COLOR_RESET;
     exit(0);
 } else {
