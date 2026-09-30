@@ -12,7 +12,9 @@
 
 declare(strict_types=1);
 
+require_once BASE_PATH . '/middlewares/AuthMiddleware.php';
 require_once BASE_PATH . '/controllers/AuthController.php';
+require_once BASE_PATH . '/controllers/ProfileController.php';
 
 // ── Health Check: GET / ───────────────────────────────────────────────────────
 $router->get('/', function (array $params): void {
@@ -34,5 +36,16 @@ $router->get('/api', function (array $params): void {
     exit();
 });
 
-// ── AUTH MODULE (Phase 2B) ───────────────────────────────────────────────────
+// ── AUTH MODULE ───────────────────────────────────────────────────────────────
+// Phase 2B: Register
 $router->post('/api/auth/register', [AuthController::class, 'register']);
+
+// Phase 2C: Login
+$router->post('/api/auth/login', [AuthController::class, 'login']);
+
+// ── PROFILES MODULE ───────────────────────────────────────────────────────────
+// Phase 2D-1: Get My Profile
+$router->get('/api/profiles/me', [AuthMiddleware::class, 'handle'], [AuthController::class, 'me']);
+
+// Phase 2D-2: Update My Profile
+$router->put('/api/profiles/me', [AuthMiddleware::class, 'handle'], [ProfileController::class, 'updateProfile']);

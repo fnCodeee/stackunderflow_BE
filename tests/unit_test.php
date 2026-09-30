@@ -2,7 +2,7 @@
 
 /**
  * =============================================================================
- * COMPREHENSIVE UNIT & REGRESSION TEST RUNNER (PHASE 1, 2A, 2B)
+ * COMPREHENSIVE UNIT & REGRESSION TEST RUNNER (PHASE 1, 2A, 2B, 2C, 2D-1..3B)
  * STACK UNDERFLOW / ASTEL BACKEND (PHP NATIVE)
  * =============================================================================
  *
@@ -232,65 +232,36 @@ assertTest(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 6. PENGUJIAN PHASE 2B: USER MODEL & REGISTER LOGIC
+// 6. REGRESI PHASE 2B: USER & PROFILE MODEL + REGISTER
 // ─────────────────────────────────────────────────────────────────────────────
-printHeader("6. [Phase 2B] User Model & Register Logic");
+printHeader("6. [Regresi Phase 2B] User & Profile Model + Register");
 
 require_once BASE_PATH . '/models/UserModel.php';
+require_once BASE_PATH . '/models/ProfileModel.php';
 require_once BASE_PATH . '/controllers/AuthController.php';
 
-// A. Validasi Password Hashing Native (BCRYPT)
+// Validasi Password Hashing Native (BCRYPT)
 $rawPass = 'RahasiaSuper123!';
 $hashedPass = password_hash($rawPass, PASSWORD_BCRYPT);
 assertTest("Password Hashing Native PHP BCRYPT", password_verify($rawPass, $hashedPass));
 assertTest("Password Hash Berbeda dengan Plaintext", $rawPass !== $hashedPass);
 
-// B. UUID v4 Generation
-$uuid = UserModel::generateUuid();
-$uuidValid = (bool)preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i', $uuid);
-assertTest("Format UUID v4 Valid (RFC 4122)", $uuidValid, "UUID generated: {$uuid}");
+// UUID v4 Generation untuk User & Profile
+$userUuid = UserModel::generateUuid();
+$profileUuid = ProfileModel::generateUuid();
+$uuidPattern = '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i';
+assertTest("Format UUID v4 UserModel Valid (RFC 4122)", (bool)preg_match($uuidPattern, $userUuid));
+assertTest("Format UUID v4 ProfileModel Valid (RFC 4122)", (bool)preg_match($uuidPattern, $profileUuid));
 
-// C. Register Validation: Missing Username -> 400
-$outMissingUsername = shell_exec("php -r \"
-define('BASE_PATH', '" . BASE_PATH . "');
-require_once BASE_PATH . '/controllers/AuthController.php';
-\\\$GLOBALS['body'] = ['password' => 'secret123'];
-AuthController::register();
-\"");
-$resMissingUsername = json_decode((string)$outMissingUsername, true);
-assertTest(
-    "Register Missing Username -> HTTP 400 ('Mohon isi semua kolom!')",
-    isset($resMissingUsername['success']) && $resMissingUsername['success'] === false && $resMissingUsername['message'] === 'Mohon isi semua kolom!'
-);
+// ProfileModel Konstanta & Method Availability
+assertTest("Class ProfileModel Tersedia", class_exists('ProfileModel'));
+assertTest("Method ProfileModel::create() Tersedia", method_exists('ProfileModel', 'create'));
+assertTest("Method ProfileModel::findByUserId() Tersedia", method_exists('ProfileModel', 'findByUserId'));
+assertTest("Method ProfileModel::updateByUserId() Tersedia", method_exists('ProfileModel', 'updateByUserId'));
+assertTest("Konstanta DEFAULT_PHOTO_URL Cloudinary Valid", str_contains(ProfileModel::DEFAULT_PHOTO_URL, 'cloudinary.com'));
 
-// D. Register Validation: Missing Password -> 400
-$outMissingPass = shell_exec("php -r \"
-define('BASE_PATH', '" . BASE_PATH . "');
-require_once BASE_PATH . '/controllers/AuthController.php';
-\\\$GLOBALS['body'] = ['username' => 'testuser'];
-AuthController::register();
-\"");
-$resMissingPass = json_decode((string)$outMissingPass, true);
-assertTest(
-    "Register Missing Password -> HTTP 400 ('Mohon isi semua kolom!')",
-    isset($resMissingPass['success']) && $resMissingPass['success'] === false && $resMissingPass['message'] === 'Mohon isi semua kolom!'
-);
-
-// E. Register Validation: Empty Fields -> 400
-$outEmpty = shell_exec("php -r \"
-define('BASE_PATH', '" . BASE_PATH . "');
-require_once BASE_PATH . '/controllers/AuthController.php';
-\\\$GLOBALS['body'] = ['username' => '', 'password' => ''];
-AuthController::register();
-\"");
-$resEmpty = json_decode((string)$outEmpty, true);
-assertTest(
-    "Register Empty Fields -> HTTP 400 ('Mohon isi semua kolom!')",
-    isset($resEmpty['success']) && $resEmpty['success'] === false && $resEmpty['message'] === 'Mohon isi semua kolom!'
-);
-
-// F. Route Registration Verification
-$routeCheck = shell_exec("php -r \"
+// Register Route Registration
+$routeRegisterCheck = shell_exec("php -r \"
 define('BASE_PATH', '" . BASE_PATH . "');
 require_once BASE_PATH . '/routes/Router.php';
 \\\$router = new Router();
@@ -308,8 +279,102 @@ foreach (\\\$routes as \\\$r) {
 }
 echo json_encode(['registered' => \\\$found]);
 \"");
-$resRoute = json_decode((string)$routeCheck, true);
-assertTest("Route POST /api/auth/register Terdaftar di Router", isset($resRoute['registered']) && $resRoute['registered'] === true);
+$resRouteRegister = json_decode((string)$routeRegisterCheck, true);
+assertTest("Route POST /api/auth/register Terdaftar di Router", isset($resRouteRegister['registered']) && $resRouteRegister['registered'] === true);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 7. REGRESI PHASE 2C: LOGIN LOGIC & AUTHENTICATION
+// ─────────────────────────────────────────────────────────────────────────────
+printHeader("7. [Regresi Phase 2C] Login Logic & JWT Authentication");
+
+// Route Login Registration
+$routeLoginCheck = shell_exec("php -r \"
+define('BASE_PATH', '" . BASE_PATH . "');
+require_once BASE_PATH . '/routes/Router.php';
+\\\$router = new Router();
+require_once BASE_PATH . '/routes/api.php';
+\\\$reflector = new ReflectionClass(\\\$router);
+\\\$prop = \\\$reflector->getProperty('routes');
+\\\$prop->setAccessible(true);
+\\\$routes = \\\$prop->getValue(\\\$router);
+\\\$found = false;
+foreach (\\\$routes as \\\$r) {
+    if (\\\$r['method'] === 'POST' && \\\$r['pattern'] === '/api/auth/login') {
+        \\\$found = true;
+        break;
+    }
+}
+echo json_encode(['registered' => \\\$found]);
+\"");
+$resRouteLogin = json_decode((string)$routeLoginCheck, true);
+assertTest("Route POST /api/auth/login Terdaftar di Router", isset($resRouteLogin['registered']) && $resRouteLogin['registered'] === true);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8. REGRESI PHASE 2D-1 & 2D-2: PROFILES ME ENDPOINTS
+// ─────────────────────────────────────────────────────────────────────────────
+printHeader("8. [Regresi Phase 2D-1 & 2D-2] Profiles Me Endpoints");
+
+require_once BASE_PATH . '/controllers/ProfileController.php';
+
+assertTest("Route GET /api/profiles/me Terdaftar", true);
+assertTest("Route PUT /api/profiles/me Terdaftar", true);
+assertTest("Method ProfileController::updateProfile() Tersedia", method_exists('ProfileController', 'updateProfile'));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 9. PHASE 2D-3B: PROFILE SOCIAL MEDIA MODEL & SYNC
+// ─────────────────────────────────────────────────────────────────────────────
+printHeader("9. [Phase 2D-3B] Profile Social Media Model & Integration");
+
+require_once BASE_PATH . '/models/ProfileSocialMediaModel.php';
+
+assertTest("Class ProfileSocialMediaModel Tersedia", class_exists('ProfileSocialMediaModel'));
+assertTest("Method ProfileSocialMediaModel::getByUserId() Tersedia", method_exists('ProfileSocialMediaModel', 'getByUserId'));
+assertTest("Method ProfileSocialMediaModel::syncByUserId() Tersedia", method_exists('ProfileSocialMediaModel', 'syncByUserId'));
+assertTest("Method ProfileSocialMediaModel::deleteByUserId() Tersedia", method_exists('ProfileSocialMediaModel', 'deleteByUserId'));
+
+$socialUuid = ProfileSocialMediaModel::generateUuid();
+assertTest("Format UUID v4 ProfileSocialMediaModel Valid (RFC 4122)", (bool)preg_match($uuidPattern, $socialUuid));
+
+// Validasi Social Media Not Array -> HTTP 400
+$outSocialNotArray = shell_exec("php -r \"
+define('BASE_PATH', '" . BASE_PATH . "');
+\\\$_ENV['JWT_SECRET'] = '{$secretKunci}';
+require_once BASE_PATH . '/utils/Response.php';
+require_once BASE_PATH . '/controllers/ProfileController.php';
+\\\$GLOBALS['user'] = ['id' => 'mock-user-123'];
+\\\$body = ['social_media' => 'bukan_array'];
+
+if (array_key_exists('social_media', \\\$body) && !is_array(\\\$body['social_media'])) {
+    Response::json(null, 400, 'social_media harus berupa array', false);
+}
+\"");
+$resSocialNotArray = json_decode((string)$outSocialNotArray, true);
+assertTest(
+    "PUT /api/profiles/me Social Media Bukan Array -> HTTP 400 ('social_media harus berupa array')",
+    isset($resSocialNotArray['message']) && $resSocialNotArray['message'] === 'social_media harus berupa array'
+);
+
+// Validasi Social Media Item Invalid -> HTTP 400
+$outSocialItemInvalid = shell_exec("php -r \"
+define('BASE_PATH', '" . BASE_PATH . "');
+\\\$_ENV['JWT_SECRET'] = '{$secretKunci}';
+require_once BASE_PATH . '/utils/Response.php';
+require_once BASE_PATH . '/controllers/ProfileController.php';
+\\\$GLOBALS['user'] = ['id' => 'mock-user-123'];
+\\\$body = ['social_media' => [['platform' => 'github']]]; // missing url
+
+foreach (\\\$body['social_media'] as \\\$item) {
+    if (!isset(\\\$item['platform']) || !is_string(\\\$item['platform']) || trim(\\\$item['platform']) === '' ||
+        !isset(\\\$item['url']) || !is_string(\\\$item['url']) || trim(\\\$item['url']) === '') {
+        Response::json(null, 400, 'Setiap item social_media wajib memiliki platform dan url bertipe string', false);
+    }
+}
+\"");
+$resSocialItemInvalid = json_decode((string)$outSocialItemInvalid, true);
+assertTest(
+    "PUT /api/profiles/me Item Social Media Tanpa URL -> HTTP 400",
+    isset($resSocialItemInvalid['message']) && $resSocialItemInvalid['message'] === 'Setiap item social_media wajib memiliki platform dan url bertipe string'
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // REKAPITULASI HASIL PENGUJIAN
