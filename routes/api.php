@@ -13,8 +13,10 @@
 declare(strict_types=1);
 
 require_once BASE_PATH . '/middlewares/AuthMiddleware.php';
+require_once BASE_PATH . '/middlewares/OptionalAuthMiddleware.php';
 require_once BASE_PATH . '/controllers/AuthController.php';
 require_once BASE_PATH . '/controllers/ProfileController.php';
+require_once BASE_PATH . '/controllers/PostController.php';
 
 // ── Health Check: GET / ───────────────────────────────────────────────────────
 $router->get('/', function (array $params): void {
@@ -49,3 +51,11 @@ $router->get('/api/profiles/me', [AuthMiddleware::class, 'handle'], [AuthControl
 
 // Phase 2D-2: Update My Profile
 $router->put('/api/profiles/me', [AuthMiddleware::class, 'handle'], [ProfileController::class, 'updateProfile']);
+
+// ── FEEDS / POST MODULE ───────────────────────────────────────────────────────
+// Phase 3B: Create Post
+$router->post('/api/posts', [AuthMiddleware::class, 'handle'], [PostController::class, 'createPost']);
+
+// Phase 3C: Get All Posts / Showcase Feed (optional auth — publik dapat mengakses)
+$router->get('/api/posts', [OptionalAuthMiddleware::class, 'handle'], [PostController::class, 'showCase']);
+

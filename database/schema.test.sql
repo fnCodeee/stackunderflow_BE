@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS user_skill (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =========================================================
+-- =========================================================
 -- 2. FEEDS MODULE
 -- =========================================================
 
@@ -99,8 +100,10 @@ CREATE TABLE IF NOT EXISTS public_posts (
     id VARCHAR(36) NOT NULL DEFAULT (UUID()),
     user_id VARCHAR(36) NOT NULL,
     title VARCHAR(150) NOT NULL,
-    description TEXT NULL,
-    external_url VARCHAR(150) NULL,
+    description TEXT NOT NULL,
+    portfolio_type ENUM('link', 'images') NOT NULL DEFAULT 'link',
+    external_url VARCHAR(255) NULL,
+    view_count INT NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
@@ -115,7 +118,8 @@ CREATE TABLE IF NOT EXISTS public_posts (
 CREATE TABLE IF NOT EXISTS media_posts (
     id VARCHAR(36) NOT NULL DEFAULT (UUID()),
     post_id VARCHAR(36) NOT NULL,
-    media_url VARCHAR(150) NOT NULL,
+    media_url VARCHAR(255) NOT NULL,
+    media_public_id VARCHAR(150) NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (id),
@@ -149,7 +153,7 @@ CREATE TABLE IF NOT EXISTS comments (
     id VARCHAR(36) NOT NULL DEFAULT (UUID()),
     user_id VARCHAR(36) NOT NULL,
     post_id VARCHAR(36) NOT NULL,
-    message TEXT NOT NULL,
+    content TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 

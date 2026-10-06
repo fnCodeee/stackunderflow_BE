@@ -17,6 +17,7 @@ declare(strict_types=1);
 require_once BASE_PATH . '/models/UserModel.php';
 require_once BASE_PATH . '/models/ProfileModel.php';
 require_once BASE_PATH . '/models/ProfileSocialMediaModel.php';
+require_once BASE_PATH . '/models/UserSkillModel.php';
 require_once BASE_PATH . '/utils/Response.php';
 require_once BASE_PATH . '/utils/JWT.php';
 
@@ -206,7 +207,10 @@ class AuthController
             // 3. Ambil data social media dari tabel profile_social_medias
             $socialMedia = ProfileSocialMediaModel::getByUserId($userId);
 
-            // 4. Gabungkan data users + profiles + social_media (snake_case)
+            // 4. Ambil data skills dari tabel user_skill & skills
+            $skills = UserSkillModel::getByUserId($userId);
+
+            // 5. Gabungkan data users + profiles + social_media + skills (snake_case)
             $responseData = [
                 'user_id'                 => $user['id'],
                 'username'                => $user['username'],
@@ -216,6 +220,7 @@ class AuthController
                 'photo_profile_url'       => $profile['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
                 'photo_profile_public_id' => $profile['photo_profile_public_id'] ?? '',
                 'social_media'            => $socialMedia,
+                'skills'                  => $skills,
             ];
 
             Response::json($responseData, 200, 'Berhasil Mendapatkan Data!', true);

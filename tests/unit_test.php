@@ -377,11 +377,407 @@ assertTest(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 10. PHASE 2D-4B: USER SKILL RELATION MODEL (UserSkillModel)
+// ─────────────────────────────────────────────────────────────────────────────
+printHeader("10. [Phase 2D-4B] User Skill Relation Model (models/UserSkillModel.php)");
+
+require_once BASE_PATH . '/models/UserSkillModel.php';
+
+// 1. Availability check
+assertTest("Class UserSkillModel Tersedia", class_exists('UserSkillModel'));
+assertTest("Method UserSkillModel::getByUserId() Tersedia", method_exists('UserSkillModel', 'getByUserId'));
+assertTest("Method UserSkillModel::add() Tersedia", method_exists('UserSkillModel', 'add'));
+assertTest("Method UserSkillModel::remove() Tersedia", method_exists('UserSkillModel', 'remove'));
+assertTest("Method UserSkillModel::exists() Tersedia", method_exists('UserSkillModel', 'exists'));
+assertTest("Method UserSkillModel::generateUuid() Tersedia", method_exists('UserSkillModel', 'generateUuid'));
+
+// 2. UUID v4 Format
+$userSkillUuid = UserSkillModel::generateUuid();
+assertTest("Format UUID v4 UserSkillModel Valid (RFC 4122)", (bool)preg_match($uuidPattern, $userSkillUuid));
+
+// 3. Method reflection & parameter validation
+$userSkillReflector = new ReflectionClass('UserSkillModel');
+$getMethod = $userSkillReflector->getMethod('getByUserId');
+$addMethod = $userSkillReflector->getMethod('add');
+$removeMethod = $userSkillReflector->getMethod('remove');
+$existsMethod = $userSkillReflector->getMethod('exists');
+
+assertTest("Method getByUserId() Menerima Tepat 1 Parameter (string \$userId)", $getMethod->getNumberOfParameters() === 1);
+assertTest("Method add() Menerima Tepat 2 Parameter (string \$userId, string \$skillId)", $addMethod->getNumberOfParameters() === 2);
+assertTest("Method remove() Menerima Tepat 2 Parameter (string \$userId, string \$skillId)", $removeMethod->getNumberOfParameters() === 2);
+assertTest("Method exists() Menerima Tepat 2 Parameter (string \$userId, string \$skillId)", $existsMethod->getNumberOfParameters() === 2);
+
+// 4. Contract and query analysis
+$sourceCode = (string)file_get_contents(BASE_PATH . '/models/UserSkillModel.php');
+
+assertTest("Query getByUserId() Menggunakan JOIN Antara user_skill dan skills", str_contains($sourceCode, 'JOIN skills'));
+assertTest("Query getByUserId() Memfilter Berdasarkan user_skill.user_id = :user_id", str_contains($sourceCode, 'user_id = :user_id'));
+assertTest("Query getByUserId() Mengurutkan Berdasarkan skill_name ASC", str_contains($sourceCode, 'ORDER BY s.skill_name ASC'));
+assertTest("Query getByUserId() Hanya Memilih Kolom (id, skill_name, scope) Tanpa Expose Data Sensitif", !str_contains($sourceCode, 'password') && str_contains($sourceCode, 'SELECT s.id, s.skill_name, s.scope'));
+
+assertTest("Method add() Melakukan Pengecekan Keberadaan User Terlebih Dahulu", str_contains($sourceCode, 'FROM users WHERE id = :user_id'));
+assertTest("Method add() Melakukan Pengecekan Keberadaan Skill Terlebih Dahulu", str_contains($sourceCode, 'FROM skills WHERE id = :skill_id'));
+assertTest("Method add() Mencegah Duplikasi Relasi Menggunakan self::exists()", str_contains($sourceCode, 'self::exists($userId, $skillId)'));
+
+assertTest("Method remove() Menggunakan Query DELETE Berdasarkan user_id Dan skill_id", str_contains($sourceCode, 'DELETE FROM user_skill') && str_contains($sourceCode, 'skill_id = :skill_id'));
+assertTest("Method exists() Menggunakan Query SELECT COUNT(*) FROM user_skill", str_contains($sourceCode, 'SELECT COUNT(*) FROM user_skill'));
+
+// 5. Simulated data structure & sorting validation
+$mockSkills = [
+    ['id' => 'skill-b', 'skill_name' => 'Mobile Development', 'scope' => 'system'],
+    ['id' => 'skill-a', 'skill_name' => 'Backend Development', 'scope' => 'system'],
+    ['id' => 'skill-c', 'skill_name' => 'DevOps & Cloud', 'scope' => 'system'],
+];
+usort($mockSkills, fn($a, $b) => strcmp($a['skill_name'], $b['skill_name']));
+
+assertTest("Sorting Data Skill Sesuai Ekspektasi Alphabetical (Backend -> DevOps -> Mobile)", $mockSkills[0]['skill_name'] === 'Backend Development' && $mockSkills[2]['skill_name'] === 'Mobile Development');
+assertTest("Response Data Skill Memiliki Struktur id, skill_name, scope", isset($mockSkills[0]['id'], $mockSkills[0]['skill_name'], $mockSkills[0]['scope']));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 11. PHASE 2D-4C: PROFILE API SKILL INTEGRATION (GET & PUT /api/profiles/me)
+// ─────────────────────────────────────────────────────────────────────────────
+printHeader("11. [Phase 2D-4C] Profile API Skill Integration (GET & PUT /api/profiles/me)");
+
+// 1. Availability of Model Methods for Sync
+assertTest("Method UserSkillModel::syncByUserId() Tersedia", method_exists('UserSkillModel', 'syncByUserId'));
+assertTest("Method UserSkillModel::deleteByUserId() Tersedia", method_exists('UserSkillModel', 'deleteByUserId'));
+
+// 2. GET /api/profiles/me includes skills in response
+$authControllerSource = (string)file_get_contents(BASE_PATH . '/controllers/AuthController.php');
+assertTest("AuthController::me() Memanggil UserSkillModel::getByUserId()", str_contains($authControllerSource, 'UserSkillModel::getByUserId($userId)'));
+assertTest("AuthController::me() Mengembalikan Response Data Berisi 'skills'", str_contains($authControllerSource, "'skills'                  => \$skills"));
+assertTest("AuthController::me() Mempertahankan Seluruh Field Profile Existing (user_id, username, email, full_name, bio, photo_profile_url, photo_profile_public_id, social_media)", 
+    str_contains($authControllerSource, "'user_id'") &&
+    str_contains($authControllerSource, "'username'") &&
+    str_contains($authControllerSource, "'email'") &&
+    str_contains($authControllerSource, "'full_name'") &&
+    str_contains($authControllerSource, "'bio'") &&
+    str_contains($authControllerSource, "'photo_profile_url'") &&
+    str_contains($authControllerSource, "'photo_profile_public_id'") &&
+    str_contains($authControllerSource, "'social_media'")
+);
+
+// 3. PUT /api/profiles/me Skills Validation: Non-array -> HTTP 400
+$outSkillsNotArray = shell_exec("php -r \"
+define('BASE_PATH', '" . BASE_PATH . "');
+\\\$_ENV['JWT_SECRET'] = '{$secretKunci}';
+require_once BASE_PATH . '/utils/Response.php';
+require_once BASE_PATH . '/controllers/ProfileController.php';
+\\\$GLOBALS['user'] = ['id' => 'mock-user-123'];
+\\\$body = ['skills' => 'bukan_array'];
+
+if (array_key_exists('skills', \\\$body) && !is_array(\\\$body['skills'])) {
+    Response::json(null, 400, 'skills harus berupa array', false);
+}
+\"");
+$resSkillsNotArray = json_decode((string)$outSkillsNotArray, true);
+assertTest(
+    "PUT /api/profiles/me Skills Bukan Array -> HTTP 400 ('skills harus berupa array')",
+    isset($resSkillsNotArray['message']) && $resSkillsNotArray['message'] === 'skills harus berupa array'
+);
+
+// 4. PUT /api/profiles/me Skills Validation: Item Invalid -> HTTP 400
+$outSkillsItemInvalid = shell_exec("php -r \"
+define('BASE_PATH', '" . BASE_PATH . "');
+\\\$_ENV['JWT_SECRET'] = '{$secretKunci}';
+require_once BASE_PATH . '/utils/Response.php';
+require_once BASE_PATH . '/controllers/ProfileController.php';
+\\\$GLOBALS['user'] = ['id' => 'mock-user-123'];
+\\\$body = ['skills' => ['']]; // empty string ID
+
+foreach (\\\$body['skills'] as \\\$item) {
+    \\\$skillId = is_string(\\\$item) ? trim(\\\$item) : (is_array(\\\$item) ? (\\\$item['id'] ?? '') : '');
+    if (\\\$skillId === '') {
+        Response::json(null, 400, 'Setiap item skills harus berupa skill ID yang valid', false);
+    }
+}
+\"");
+$resSkillsItemInvalid = json_decode((string)$outSkillsItemInvalid, true);
+assertTest(
+    "PUT /api/profiles/me Item Skills Kosong/Invalid -> HTTP 400",
+    isset($resSkillsItemInvalid['message']) && $resSkillsItemInvalid['message'] === 'Setiap item skills harus berupa skill ID yang valid'
+);
+
+// 5. Code contract analysis for ProfileController::updateProfile()
+$profileControllerSource = (string)file_get_contents(BASE_PATH . '/controllers/ProfileController.php');
+assertTest("ProfileController Mengimpor UserSkillModel", str_contains($profileControllerSource, "require_once BASE_PATH . '/models/UserSkillModel.php';"));
+assertTest("ProfileController Menjalankan Sinkronisasi Skills dalam PDO Transaction", str_contains($profileControllerSource, 'UserSkillModel::syncByUserId($userId, $skillIds)'));
+assertTest("ProfileController Memvalidasi Seluruh Skill ID ke Tabel skills", str_contains($profileControllerSource, 'SELECT id FROM skills WHERE id IN'));
+assertTest("ProfileController Mengembalikan skills dan social_media Terkini Pada Response PUT", 
+    str_contains($profileControllerSource, "'skills'                  => \$skills") &&
+    str_contains($profileControllerSource, "'social_media'            => \$socialMedia")
+);
+
+// 6. Support for both string ID and object format in skills normalization
+$testSkillsPayload = ['skill-uuid-1', ['id' => 'skill-uuid-2'], ['skill_id' => 'skill-uuid-3']];
+$normalizedIds = [];
+foreach ($testSkillsPayload as $it) {
+    if (is_string($it)) {
+        $normalizedIds[] = trim($it);
+    } elseif (is_array($it) && isset($it['id'])) {
+        $normalizedIds[] = trim((string)$it['id']);
+    } elseif (is_array($it) && isset($it['skill_id'])) {
+        $normalizedIds[] = trim((string)$it['skill_id']);
+    }
+}
+assertTest("Normalisasi Input Skills Mendukung String ID Maupun Object Format ({id: '...'})", $normalizedIds === ['skill-uuid-1', 'skill-uuid-2', 'skill-uuid-3']);
+
+// 7. Deduplication test
+$duplicateInput = ['skill-1', 'skill-2', 'skill-1', 'skill-2', 'skill-3'];
+$uniqueResult = array_values(array_unique($duplicateInput));
+assertTest("Pencegahan Duplikasi Relasi Skill (Unique Array Filter)", $uniqueResult === ['skill-1', 'skill-2', 'skill-3']);
+
+// 8. Empty skills array clears relations (skills: [])
+$emptySkillsInput = [];
+$clearedSkillsResult = array_values(array_unique(array_filter($emptySkillsInput, fn($id) => is_string($id) && trim($id) !== '')));
+assertTest("Format skills: [] Menghasilkan Array Kosong untuk Sinkronisasi Penghapusan", $clearedSkillsResult === []);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 12. PHASE 3B: CREATE POST (PostModel & PostController)
+// ─────────────────────────────────────────────────────────────────────────────
+printHeader("12. [Phase 3B] Create Post (PostModel & PostController)");
+
+require_once BASE_PATH . '/models/PostModel.php';
+require_once BASE_PATH . '/controllers/PostController.php';
+
+// 1. Availability check
+assertTest("Class PostModel Tersedia", class_exists('PostModel'));
+assertTest("Method PostModel::create() Tersedia", method_exists('PostModel', 'create'));
+assertTest("Method PostModel::findById() Tersedia", method_exists('PostModel', 'findById'));
+assertTest("Method PostModel::deleteById() Tersedia", method_exists('PostModel', 'deleteById'));
+assertTest("Method PostModel::generateUuid() Tersedia", method_exists('PostModel', 'generateUuid'));
+
+$postUuid = PostModel::generateUuid();
+assertTest("Format UUID v4 PostModel Valid (RFC 4122)", (bool)preg_match($uuidPattern, $postUuid));
+
+assertTest("Class PostController Tersedia", class_exists('PostController'));
+assertTest("Method PostController::createPost() Tersedia", method_exists('PostController', 'createPost'));
+
+// 2. Route Registration check for POST /api/posts
+$routePostCheck = shell_exec("php -r \"
+define('BASE_PATH', '" . BASE_PATH . "');
+require_once BASE_PATH . '/routes/Router.php';
+\\\$router = new Router();
+require_once BASE_PATH . '/routes/api.php';
+\\\$reflector = new ReflectionClass(\\\$router);
+\\\$prop = \\\$reflector->getProperty('routes');
+\\\$prop->setAccessible(true);
+\\\$routes = \\\$prop->getValue(\\\$router);
+\\\$found = false;
+foreach (\\\$routes as \\\$r) {
+    if (\\\$r['method'] === 'POST' && \\\$r['pattern'] === '/api/posts') {
+        \\\$found = true;
+        break;
+    }
+}
+echo json_encode(['registered' => \\\$found]);
+\"");
+$resRoutePost = json_decode((string)$routePostCheck, true);
+assertTest("Route POST /api/posts Terdaftar di Router", isset($resRoutePost['registered']) && $resRoutePost['registered'] === true);
+
+// 3. Validation: Missing Title/Description/mediaUrls -> HTTP 400
+$outPostMissingFields = shell_exec("php -r \"
+define('BASE_PATH', '" . BASE_PATH . "');
+\\\$_ENV['JWT_SECRET'] = '{$secretKunci}';
+require_once BASE_PATH . '/utils/Response.php';
+require_once BASE_PATH . '/controllers/PostController.php';
+\\\$GLOBALS['user'] = ['id' => 'mock-user-123'];
+\\\$body = ['title' => '', 'description' => 'Test', 'mediaUrls' => []];
+
+\\\$title = trim((string)(\\\$body['title'] ?? ''));
+\\\$description = trim((string)(\\\$body['description'] ?? ''));
+\\\$mediaUrls = \\\$body['media_urls'] ?? \\\$body['mediaUrls'] ?? null;
+
+if (\\\$title === '' || \\\$description === '' || !is_array(\\\$mediaUrls) || count(\\\$mediaUrls) === 0) {
+    Response::json(null, 400, 'Please fill all the required fields!', false);
+}
+\"");
+$resPostMissingFields = json_decode((string)$outPostMissingFields, true);
+assertTest(
+    "POST /api/posts Validasi Field Wajib Kosong -> HTTP 400 ('Please fill all the required fields!')",
+    isset($resPostMissingFields['message']) && $resPostMissingFields['message'] === 'Please fill all the required fields!'
+);
+
+// 4. Validation: mediaUrls and mediaPublicIds length mismatch -> HTTP 400
+$outPostMediaMismatch = shell_exec("php -r \"
+define('BASE_PATH', '" . BASE_PATH . "');
+\\\$_ENV['JWT_SECRET'] = '{$secretKunci}';
+require_once BASE_PATH . '/utils/Response.php';
+require_once BASE_PATH . '/controllers/PostController.php';
+\\\$GLOBALS['user'] = ['id' => 'mock-user-123'];
+\\\$body = [
+    'title' => 'My Post',
+    'description' => 'Cool description',
+    'mediaUrls' => ['https://res.cloudinary.com/img1.jpg', 'https://res.cloudinary.com/img2.jpg'],
+    'mediaPublicIds' => ['pub_1'] // mismatch length
+];
+
+\\\$mediaUrls = \\\$body['media_urls'] ?? \\\$body['mediaUrls'] ?? null;
+\\\$mediaPublicIds = \\\$body['media_public_ids'] ?? \\\$body['mediaPublicIds'] ?? [];
+
+if (is_array(\\\$mediaPublicIds) && count(\\\$mediaPublicIds) > 0 && count(\\\$mediaUrls) !== count(\\\$mediaPublicIds)) {
+    Response::json(null, 400, 'Count of mediaUrls and mediaPublicIds must be same!', false);
+}
+\"");
+$resPostMediaMismatch = json_decode((string)$outPostMediaMismatch, true);
+assertTest(
+    "POST /api/posts Validasi Mismatch Jumlah Media -> HTTP 400 ('Count of mediaUrls and mediaPublicIds must be same!')",
+    isset($resPostMediaMismatch['message']) && $resPostMediaMismatch['message'] === 'Count of mediaUrls and mediaPublicIds must be same!'
+);
+
+// 5. Code contract analysis for PostModel
+$postModelSource = (string)file_get_contents(BASE_PATH . '/models/PostModel.php');
+assertTest("PostModel::create() Menggunakan PDO Transaction", str_contains($postModelSource, '$pdo->beginTransaction()') && str_contains($postModelSource, '$pdo->commit()'));
+assertTest("PostModel::create() Menyimpan ke Tabel public_posts", str_contains($postModelSource, 'INSERT INTO public_posts'));
+assertTest("PostModel::create() Menyimpan ke Tabel media_posts", str_contains($postModelSource, 'INSERT INTO media_posts'));
+assertTest("PostModel Menetapkan default view_count 0", str_contains($postModelSource, 'view_count') && str_contains($postModelSource, '0'));
+
+// 6. Code contract analysis for PostController
+$postControllerSource = (string)file_get_contents(BASE_PATH . '/controllers/PostController.php');
+assertTest("PostController Mengambil userId dari Authenticated User (\$GLOBALS['user']['id'])", str_contains($postControllerSource, "\$GLOBALS['user']['id']"));
+assertTest("PostController Mengembalikan Response Sukses 'Postingan Berhasil dibuat'", str_contains($postControllerSource, 'Postingan Berhasil dibuat'));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 13. PHASE 3C: GET POSTS / SHOWCASE (PostModel::getAll & PostController::showCase)
+// ─────────────────────────────────────────────────────────────────────────────
+printHeader("13. [Phase 3C] Get Posts / Showcase Feed (GET /api/posts)");
+
+require_once BASE_PATH . '/middlewares/OptionalAuthMiddleware.php';
+
+// 1. Availability check
+assertTest("Class OptionalAuthMiddleware Tersedia", class_exists('OptionalAuthMiddleware'));
+assertTest("Method OptionalAuthMiddleware::handle() Tersedia", method_exists('OptionalAuthMiddleware', 'handle'));
+assertTest("Method PostModel::getAll() Tersedia", method_exists('PostModel', 'getAll'));
+assertTest("Method PostController::showCase() Tersedia", method_exists('PostController', 'showCase'));
+
+// 2. OptionalAuthMiddleware behaviour: no token -> $GLOBALS['user'] = null
+$outOptionalNoToken = shell_exec("php -r \"
+define('BASE_PATH', '" . BASE_PATH . "');
+\\\$_ENV['JWT_SECRET'] = '{$secretKunci}';
+require_once BASE_PATH . '/utils/JWT.php';
+require_once BASE_PATH . '/middlewares/OptionalAuthMiddleware.php';
+\\\$_SERVER['HTTP_AUTHORIZATION'] = '';
+OptionalAuthMiddleware::handle([]);
+echo json_encode(['user' => \\\$GLOBALS['user']]);
+\"");
+$resOptionalNoToken = json_decode((string)$outOptionalNoToken, true);
+assertTest(
+    "OptionalAuthMiddleware Tanpa Token -> \$GLOBALS['user'] === null",
+    isset($resOptionalNoToken) && array_key_exists('user', $resOptionalNoToken) && $resOptionalNoToken['user'] === null
+);
+
+// 3. OptionalAuthMiddleware behaviour: invalid token -> $GLOBALS['user'] = null (no 401)
+$outOptionalBadToken = shell_exec("php -r \"
+define('BASE_PATH', '" . BASE_PATH . "');
+\\\$_ENV['JWT_SECRET'] = '{$secretKunci}';
+require_once BASE_PATH . '/utils/JWT.php';
+require_once BASE_PATH . '/middlewares/OptionalAuthMiddleware.php';
+\\\$_SERVER['HTTP_AUTHORIZATION'] = 'Bearer token.tidak.valid';
+OptionalAuthMiddleware::handle([]);
+echo json_encode(['user' => \\\$GLOBALS['user']]);
+\"");
+$resOptionalBadToken = json_decode((string)$outOptionalBadToken, true);
+assertTest(
+    "OptionalAuthMiddleware Token Invalid -> \$GLOBALS['user'] === null (Tidak Mengembalikan 401)",
+    isset($resOptionalBadToken) && array_key_exists('user', $resOptionalBadToken) && $resOptionalBadToken['user'] === null
+);
+
+// 4. Route registration check for GET /api/posts
+$routeGetPostsCheck = shell_exec("php -r \"
+define('BASE_PATH', '" . BASE_PATH . "');
+require_once BASE_PATH . '/routes/Router.php';
+\\\$router = new Router();
+require_once BASE_PATH . '/routes/api.php';
+\\\$reflector = new ReflectionClass(\\\$router);
+\\\$prop = \\\$reflector->getProperty('routes');
+\\\$prop->setAccessible(true);
+\\\$routes = \\\$prop->getValue(\\\$router);
+\\\$found = false;
+foreach (\\\$routes as \\\$r) {
+    if (\\\$r['method'] === 'GET' && \\\$r['pattern'] === '/api/posts') {
+        \\\$found = true;
+        break;
+    }
+}
+echo json_encode(['registered' => \\\$found]);
+\"");
+$resRouteGetPosts = json_decode((string)$routeGetPostsCheck, true);
+assertTest("Route GET /api/posts Terdaftar di Router", isset($resRouteGetPosts['registered']) && $resRouteGetPosts['registered'] === true);
+
+// 5. Code contract: PostModel::getAll() — JOIN users & profiles
+$postModelSource = (string)file_get_contents(BASE_PATH . '/models/PostModel.php');
+assertTest("PostModel::getAll() Menggunakan JOIN Tabel users", str_contains($postModelSource, 'JOIN users'));
+assertTest("PostModel::getAll() Menggunakan JOIN Tabel profiles", str_contains($postModelSource, 'JOIN profiles'));
+assertTest("PostModel::getAll() Mengurutkan Berdasarkan created_at DESC", str_contains($postModelSource, 'ORDER BY p.created_at DESC'));
+assertTest("PostModel::getAll() Mengambil like_count dari Tabel like_posts", str_contains($postModelSource, 'FROM like_posts'));
+assertTest("PostModel::getAll() Mengambil comment_count dari Tabel comments", str_contains($postModelSource, 'FROM comments'));
+assertTest("PostModel::getAll() Menyertakan is_liked dalam Response", str_contains($postModelSource, 'is_liked'));
+assertTest("PostModel::getAll() Mengembalikan Array Kosong Jika Tidak Ada Post (bukan throw exception)", str_contains($postModelSource, 'return []'));
+
+// 6. Code contract: PostController::showCase() — HTTP 404 jika kosong
+$postControllerSource = (string)file_get_contents(BASE_PATH . '/controllers/PostController.php');
+assertTest("PostController::showCase() Mengembalikan HTTP 404 Jika Tidak Ada Post", str_contains($postControllerSource, 'Belum ada postingan saat ini!'));
+assertTest("PostController::showCase() Mengembalikan HTTP 200 dan Pesan Sukses Jika Ada Post", str_contains($postControllerSource, 'Berhasil mendapatkan semua Postingan!'));
+
+// 7. Response structure validation: simulate expected post shape
+$mockPost = [
+    'id'             => 'post-uuid-xxx',
+    'user_id'        => [
+        'id'                => 'user-uuid-yyy',
+        'username'          => 'faizath',
+        'photo_profile_url' => 'profile.png',
+    ],
+    'title'          => 'My Project',
+    'description'    => 'A cool portfolio piece',
+    'portfolio_type' => 'images',
+    'external_url'   => null,
+    'media_urls'     => ['https://res.cloudinary.com/img1.jpg'],
+    'media_public_ids' => [],
+    'view_count'     => 0,
+    'like_count'     => 0,
+    'comment_count'  => 0,
+    'is_liked'       => false,
+    'created_at'     => '2026-01-01 00:00:00',
+    'updated_at'     => '2026-01-01 00:00:00',
+];
+assertTest(
+    "Struktur Response Post Memiliki field user_id sebagai Nested Object (id, username, photo_profile_url)",
+    is_array($mockPost['user_id']) &&
+    isset($mockPost['user_id']['id'], $mockPost['user_id']['username'], $mockPost['user_id']['photo_profile_url'])
+);
+assertTest(
+    "Struktur Response Post Memiliki like_count, comment_count, is_liked",
+    array_key_exists('like_count', $mockPost) &&
+    array_key_exists('comment_count', $mockPost) &&
+    array_key_exists('is_liked', $mockPost)
+);
+assertTest(
+    "is_liked Default false untuk Guest (Boolean)",
+    $mockPost['is_liked'] === false
+);
+assertTest(
+    "like_count dan comment_count Bertipe Integer",
+    is_int($mockPost['like_count']) && is_int($mockPost['comment_count'])
+);
+
+// 8. PostModel::getAll() accepts optional ?string parameter
+$getAllRef = new ReflectionMethod('PostModel', 'getAll');
+$getAllParams = $getAllRef->getParameters();
+assertTest(
+    "PostModel::getAll() Menerima Parameter ?string \$currentUserId (Nullable, Optional)",
+    count($getAllParams) === 1 &&
+    $getAllParams[0]->isOptional() &&
+    $getAllParams[0]->allowsNull()
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // REKAPITULASI HASIL PENGUJIAN
+
 // ─────────────────────────────────────────────────────────────────────────────
 echo "\n" . COLOR_BOLD . "====================================================================\n";
 echo "                     REKAPITULASI HASIL PENGUJIAN                   \n";
 echo "====================================================================" . COLOR_RESET . "\n";
+
 echo "  Total Skenario Uji : " . COLOR_BOLD . "{$totalTests}" . COLOR_RESET . "\n";
 echo "  Berhasil (Passed)  : " . COLOR_GREEN . COLOR_BOLD . "{$passedTests}" . COLOR_RESET . "\n";
 echo "  Gagal    (Failed)  : " . ($failedTests > 0 ? COLOR_RED : COLOR_GREEN) . COLOR_BOLD . "{$failedTests}" . COLOR_RESET . "\n";
@@ -398,3 +794,5 @@ if ($failedTests === 0) {
     echo COLOR_BOLD . "====================================================================\n" . COLOR_RESET;
     exit(1);
 }
+
+

@@ -6,7 +6,7 @@
  * PROFILE CONTROLLER
  *
  * Menangani operasi profile pengguna:
- *  - updateProfile() -> Phase 2D-2 & 2D-3B (PUT /api/profiles/me)
+ *  - updateProfile() -> Phase 2D-2, 2D-3B & 2D-4C (PUT /api/profiles/me)
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -14,13 +14,14 @@ declare(strict_types=1);
 
 require_once BASE_PATH . '/models/ProfileModel.php';
 require_once BASE_PATH . '/models/ProfileSocialMediaModel.php';
+require_once BASE_PATH . '/models/UserSkillModel.php';
 require_once BASE_PATH . '/utils/Response.php';
 
 class ProfileController
 {
     /**
      * Handler untuk PUT /api/profiles/me
-     * Memperbarui data personal profil dan sinkronisasi social media user yang sedang login (partial update).
+     * Memperbarui data personal profil, sinkronisasi social media, dan sinkronisasi skills user yang sedang login.
      *
      * @param  array<string, string> $params Path parameters dari Router
      * @return void
@@ -89,7 +90,46 @@ class ProfileController
                 }
             }
 
-            // 5. Susun data update profile personal (hanya field yang dikirimkan)
+            // 5. Validasi skills (jika field dikirimkan)
+            $skillIds = [];
+            if (array_key_exists('skills', $body)) {
+                if (!is_array($body['skills'])) {
+                    Response::json(null, 400, 'skills harus berupa array', false);
+                }
+
+                foreach ($body['skills'] as $item) {
+                    $skillId = null;
+                    if (is_string($item)) {
+                        $skillId = trim($item);
+                    } elseif (is_array($item) && isset($item['id']) && is_string($item['id'])) {
+                        $skillId = trim($item['id']);
+                    } elseif (is_array($item) && isset($item['skill_id']) && is_string($item['skill_id'])) {
+                        $skillId = trim($item['skill_id']);
+                    }
+
+                    if ($skillId === null || $skillId === '') {
+                        Response::json(null, 400, 'Setiap item skills harus berupa skill ID yang valid', false);
+                    }
+
+                    $skillIds[] = $skillId;
+                }
+
+                // Pastikan seluruh skill ID ada di tabel master skills
+                if (!empty($skillIds)) {
+                    $pdo = getDB();
+                    $uniqueSkillIds = array_values(array_unique($skillIds));
+                    $placeholders = implode(',', array_fill(0, count($uniqueSkillIds), '?'));
+                    $checkStmt = $pdo->prepare("SELECT id FROM skills WHERE id IN ($placeholders)");
+                    $checkStmt->execute($uniqueSkillIds);
+                    $foundSkills = $checkStmt->fetchAll(PDO::FETCH_COLUMN);
+
+                    if (count($foundSkills) !== count($uniqueSkillIds)) {
+                        Response::json(null, 400, 'Terdapat skill ID yang tidak valid atau tidak ditemukan', false);
+                    }
+                }
+            }
+
+            // 6. Susun data update profile personal (hanya field yang dikirimkan)
             $updateData = [];
 
             if (array_key_exists('full_name', $body)) {
@@ -108,7 +148,7 @@ class ProfileController
                 $updateData['photo_profile_public_id'] = $body['photo_profile_public_id'] !== null ? (string) $body['photo_profile_public_id'] : null;
             }
 
-            // 6. Eksekusi update profile & sinkronisasi social media dalam satu PDO Transaction
+            // 7. Eksekusi update profile, social media, dan skills dalam satu PDO Transaction
             $pdo = getDB();
             $pdo->beginTransaction();
 
@@ -121,6 +161,10 @@ class ProfileController
                     ProfileSocialMediaModel::syncByUserId($userId, $body['social_media']);
                 }
 
+                if (array_key_exists('skills', $body)) {
+                    UserSkillModel::syncByUserId($userId, $skillIds);
+                }
+
                 $pdo->commit();
             } catch (Throwable $dbError) {
                 if ($pdo->inTransaction()) {
@@ -129,25 +173,23 @@ class ProfileController
                 throw $dbError;
             }
 
-            // 7. Ambil data terbaru setelah update
+            // 8. Ambil data terbaru setelah update
             $updatedProfile = ProfileModel::findByUserId($userId);
             $socialMedia = ProfileSocialMediaModel::getByUserId($userId);
-            if (array_key_exists("social_media", $body)) {
-                ProfileSocialMediaModel::syncByUserId($userId, $body['social_media']);
-                ProfileModel::touch($userId);
-            };
+            $skills = UserSkillModel::getByUserId($userId);
 
-            // 8. Format response JSON (snake_case)
+            // 9. Format response JSON (snake_case)
             $responseData = [
-                'id' => $updatedProfile['id'],
-                'user_id' => $updatedProfile['user_id'],
-                'full_name' => $updatedProfile['full_name'] ?? '',
-                'bio' => $updatedProfile['bio'] ?? '',
-                'photo_profile_url' => $updatedProfile['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
+                'id'                      => $updatedProfile['id'],
+                'user_id'                 => $updatedProfile['user_id'],
+                'full_name'               => $updatedProfile['full_name'] ?? '',
+                'bio'                     => $updatedProfile['bio'] ?? '',
+                'photo_profile_url'       => $updatedProfile['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
                 'photo_profile_public_id' => $updatedProfile['photo_profile_public_id'] ?? '',
-                'social_media' => $socialMedia,
-                'created_at' => $updatedProfile['created_at'] ?? null,
-                'updated_at' => $updatedProfile['updated_at'] ?? null,
+                'social_media'            => $socialMedia,
+                'skills'                  => $skills,
+                'created_at'              => $updatedProfile['created_at'] ?? null,
+                'updated_at'              => $updatedProfile['updated_at'] ?? null,
             ];
 
             Response::json($responseData, 200, 'Profile berhasil diperbarui!', true);
@@ -156,3 +198,4 @@ class ProfileController
         }
     }
 }
+
