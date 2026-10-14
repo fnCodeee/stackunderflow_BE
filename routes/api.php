@@ -59,3 +59,22 @@ $router->post('/api/posts', [AuthMiddleware::class, 'handle'], [PostController::
 // Phase 3C: Get All Posts / Showcase Feed (optional auth — publik dapat mengakses)
 $router->get('/api/posts', [OptionalAuthMiddleware::class, 'handle'], [PostController::class, 'showCase']);
 
+// Phase 3D-1: Get Post Detail (auth required — sesuai Express baseline)
+$router->get('/api/posts/:postId', [AuthMiddleware::class, 'handle'], [PostController::class, 'getPostDetail']);
+
+// Phase 3D-2: Update Post (auth required — sesuai Express baseline)
+$router->put('/api/posts/:postId', [AuthMiddleware::class, 'handle'], [PostController::class, 'updatePost']);
+
+// Phase 3D-3: Delete Post (auth required — sesuai Express baseline)
+$router->delete('/api/posts/:postId', [AuthMiddleware::class, 'handle'], [PostController::class, 'deletePost']);
+
+// Phase 3D-4: Like / Unlike Post (auth required — sesuai Express baseline)
+$router->post('/api/posts/:postId/like', [AuthMiddleware::class, 'handle'], [PostController::class, 'likePost']);
+$router->delete('/api/posts/:postId/unlike', [AuthMiddleware::class, 'handle'], [PostController::class, 'unlikePost']);
+
+// Phase 3D-5: Comments (auth required — sesuai Express baseline)
+$router->post('/api/posts/:postId/comments', [AuthMiddleware::class, 'handle'], [PostController::class, 'createComment']);
+$router->get('/api/posts/:postId/comments', [AuthMiddleware::class, 'handle'], [PostController::class, 'getComments']);
+$router->delete('/api/delete/comments/:commentId', [AuthMiddleware::class, 'handle'], [PostController::class, 'deleteComment']);
+$router->delete('/api/posts/:postId/comments/:commentId', [AuthMiddleware::class, 'handle'], [PostController::class, 'deleteComment']);
+

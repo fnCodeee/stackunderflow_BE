@@ -111,6 +111,151 @@ class PostModel
     }
 
     /**
+     * Mencari post berdasarkan ID beserta detail lengkap untuk endpoint detail.
+     * Mirip findById tapi include like_count, comment_count, is_liked, dan comments.
+     * Juga increment view_count.
+     *
+     * @param  string $id UUID post
+     * @param  string|null $currentUserId ID user yang sedang login (opsional) untuk mengecek is_liked
+     * @return array<string, mixed>|null Associative array post detail atau null jika tidak ditemukan
+     */
+    public static function findDetailById(string $id, ?string $currentUserId = null): ?array
+    {
+        $pdo = getDB();
+
+        // 1. Increment view_count dan ambil data utama post dengan user + profile
+        $stmt = $pdo->prepare("
+            UPDATE public_posts 
+            SET view_count = view_count + 1 
+            WHERE id = :id
+        ");
+        $stmt->execute([':id' => $id]);
+
+        // 2. Ambil post yang sudah diupdate beserta user dan profile
+        $sql = "
+            SELECT 
+                p.id,
+                p.user_id,
+                p.title,
+                p.description,
+                p.portfolio_type,
+                p.external_url,
+                p.view_count,
+                p.created_at,
+                p.updated_at,
+                u.username,
+                pr.photo_profile_url
+            FROM public_posts p
+            LEFT JOIN users u ON p.user_id = u.id
+            LEFT JOIN profiles pr ON p.user_id = pr.user_id
+            WHERE p.id = :id
+            LIMIT 1
+        ";
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([':id' => $id]);
+        $post = $stmt->fetch();
+
+        if (!$post) {
+            return null;
+        }
+
+        // 3. Ambil media yang berelasi
+        $mediaStmt = $pdo->prepare("SELECT media_url, media_public_id FROM media_posts WHERE post_id = :post_id ORDER BY created_at ASC");
+        $mediaStmt->execute([':post_id' => $id]);
+        $mediaRows = $mediaStmt->fetchAll();
+
+        $mediaUrls = [];
+        $mediaPublicIds = [];
+
+        foreach ($mediaRows as $m) {
+            $mediaUrls[] = $m['media_url'];
+            if ($m['media_public_id'] !== null) {
+                $mediaPublicIds[] = $m['media_public_id'];
+            }
+        }
+
+        // 4. Ambil like_count
+        $likeStmt = $pdo->prepare("SELECT COUNT(*) as count FROM like_posts WHERE post_id = :post_id");
+        $likeStmt->execute([':post_id' => $id]);
+        $likeCount = (int)($likeStmt->fetchColumn() ?? 0);
+
+        // 5. Ambil comment_count
+        $commentStmt = $pdo->prepare("SELECT COUNT(*) as count FROM comments WHERE post_id = :post_id");
+        $commentStmt->execute([':post_id' => $id]);
+        $commentCount = (int)($commentStmt->fetchColumn() ?? 0);
+
+        // 6. Cek is_liked untuk user yang sedang login jika ada
+        $isLiked = false;
+        if ($currentUserId !== null && $currentUserId !== '') {
+            $userLikeStmt = $pdo->prepare("SELECT 1 FROM like_posts WHERE post_id = :post_id AND user_id = :user_id LIMIT 1");
+            $userLikeStmt->execute([':post_id' => $id, ':user_id' => $currentUserId]);
+            $isLiked = (bool)$userLikeStmt->fetchColumn();
+        }
+
+        // 7. Ambil comments dengan user + profile
+        $commentsSql = "
+            SELECT 
+                c.id,
+                c.user_id,
+                c.post_id,
+                c.content,
+                c.created_at,
+                c.updated_at,
+                u.username,
+                pr.photo_profile_url
+            FROM comments c
+            LEFT JOIN users u ON c.user_id = u.id
+            LEFT JOIN profiles pr ON c.user_id = pr.user_id
+            WHERE c.post_id = :post_id
+            ORDER BY c.created_at DESC
+        ";
+        $commentsStmt = $pdo->prepare($commentsSql);
+        $commentsStmt->execute([':post_id' => $id]);
+        $comments = $commentsStmt->fetchAll();
+
+        $commentsWithProfile = [];
+        foreach ($comments as $c) {
+            $commentsWithProfile[] = [
+                'id' => $c['id'],
+                'user_id' => $c['user_id'],
+                'post_id' => $c['post_id'],
+                'content' => $c['content'],
+                'created_at' => $c['created_at'],
+                'updated_at' => $c['updated_at'],
+                'user' => [
+                    'id' => $c['user_id'],
+                    'username' => $c['username'] ?? '',
+                    'photo_profile_url' => $c['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
+                ],
+            ];
+        }
+
+        // 8. Susun response detail post (mirip Express: ownerId, likeCount, commentCount, isLiked, comments)
+        return [
+            'id' => $post['id'],
+            'user_id' => $post['user_id'],
+            'title' => $post['title'],
+            'description' => $post['description'],
+            'portfolio_type' => $post['portfolio_type'],
+            'external_url' => $post['external_url'],
+            'media_urls' => $mediaUrls,
+            'media_public_ids' => $mediaPublicIds,
+            'view_count' => (int)($post['view_count'] ?? 0),
+            'like_count' => $likeCount,
+            'comment_count' => $commentCount,
+            'is_liked' => $isLiked,
+            'created_at' => $post['created_at'],
+            'updated_at' => $post['updated_at'],
+            'owner' => [
+                'id' => $post['user_id'],
+                'username' => $post['username'] ?? '',
+                'photo_profile_url' => $post['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
+            ],
+            'comments' => $commentsWithProfile,
+        ];
+    }
+
+    /**
      * Mencari post berdasarkan ID beserta relasi media_posts.
      *
      * @param  string $id UUID post
@@ -161,6 +306,46 @@ class PostModel
         $pdo = getDB();
         $stmt = $pdo->prepare("DELETE FROM public_posts WHERE id = :id");
         return $stmt->execute([':id' => $id]);
+    }
+
+    /**
+     * Menghapus post beserta seluruh data terkait (like_posts, comments, media_posts)
+     * dalam 1 database transaction sesuai dengan behavior Express baseline.
+     *
+     * @param  string $id UUID post
+     * @return bool True jika berhasil dihapus
+     */
+    public static function delete(string $id): bool
+    {
+        $pdo = getDB();
+
+        $pdo->beginTransaction();
+
+        try {
+            // 1. Hapus likes terkait
+            $likeStmt = $pdo->prepare("DELETE FROM like_posts WHERE post_id = :post_id");
+            $likeStmt->execute([':post_id' => $id]);
+
+            // 2. Hapus comments terkait
+            $commentStmt = $pdo->prepare("DELETE FROM comments WHERE post_id = :post_id");
+            $commentStmt->execute([':post_id' => $id]);
+
+            // 3. Hapus media_posts terkait
+            $mediaStmt = $pdo->prepare("DELETE FROM media_posts WHERE post_id = :post_id");
+            $mediaStmt->execute([':post_id' => $id]);
+
+            // 4. Hapus record utama di public_posts
+            $postStmt = $pdo->prepare("DELETE FROM public_posts WHERE id = :id");
+            $postStmt->execute([':id' => $id]);
+
+            $pdo->commit();
+            return true;
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
     }
 
     /**
@@ -289,15 +474,110 @@ class PostModel
     }
 
     /**
-     * Helper: Generate UUID v4 standar (RFC 4122).
-     *
-     * @return string
-     */
-    public static function generateUuid(): string
-    {
-        $data = random_bytes(16);
-        $data[6] = chr(ord($data[6]) & 0x0f | 0x40); // versi 4
-        $data[8] = chr(ord($data[8]) & 0x3f | 0x80); // variant RFC 4122
-        return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
-    }
-}
+     /**
+          * Update post by ID (ownership check done by controller).
+          *
+          * @param  string $id UUID post
+          * @param  array{
+          *     title: string,
+          *     description: string,
+          *     external_url: string,
+          *     portfolio_type?: string,
+          *     media_urls?: array<int, string>,
+          *     media_public_ids?: array<int, ?string>
+          * } $data
+          * @return array<string, mixed>|null Updated post detail atau null jika tidak ditemukan
+          */
+         public static function update(string $id, array $data): ?array
+         {
+             $pdo = getDB();
+
+             // 1. Cek post exists
+             $checkStmt = $pdo->prepare("SELECT user_id FROM public_posts WHERE id = :id LIMIT 1");
+             $checkStmt->execute([':id' => $id]);
+             $existing = $checkStmt->fetch();
+
+             if (!$existing) {
+                 return null; // post tidak ditemukan
+             }
+
+             $title = $data['title'];
+             $description = $data['description'];
+             $externalUrl = $data['external_url'];
+             $portfolioType = $data['portfolio_type'] ?? 'link';
+             $mediaUrls = $data['media_urls'] ?? null;
+             $mediaPublicIds = $data['media_public_ids'] ?? [];
+
+             // 2. Update public_posts dalam transaction
+             $pdo->beginTransaction();
+
+             try {
+                 $stmt = $pdo->prepare("
+                     UPDATE public_posts 
+                     SET title = :title,
+                         description = :description,
+                         external_url = :external_url,
+                         portfolio_type = :portfolio_type,
+                         updated_at = CURRENT_TIMESTAMP
+                     WHERE id = :id
+                 ");
+
+                 $stmt->execute([
+                     ':id'             => $id,
+                     ':title'          => $title,
+                     ':description'    => $description,
+                     ':external_url'   => $externalUrl,
+                     ':portfolio_type' => $portfolioType,
+                 ]);
+
+                 // 3. Update media jika mediaUrls disediakan
+                 if (is_array($mediaUrls)) {
+                     // Hapus media lama
+                     $deleteMediaStmt = $pdo->prepare("DELETE FROM media_posts WHERE post_id = :post_id");
+                     $deleteMediaStmt->execute([':post_id' => $id]);
+
+                     // Insert media baru
+                     if (!empty($mediaUrls)) {
+                         $mediaStmt = $pdo->prepare("
+                             INSERT INTO media_posts (id, post_id, media_url, media_public_id)
+                             VALUES (:id, :post_id, :media_url, :media_public_id)
+                         ");
+
+                         foreach ($mediaUrls as $index => $mediaUrl) {
+                             $mediaId = self::generateUuid();
+                             $publicId = $mediaPublicIds[$index] ?? null;
+
+                             $mediaStmt->execute([
+                                 ':id'              => $mediaId,
+                                 ':post_id'         => $id,
+                                 ':media_url'       => $mediaUrl,
+                                 ':media_public_id' => $publicId,
+                             ]);
+                         }
+                     }
+                 }
+
+                 $pdo->commit();
+             } catch (Throwable $e) {
+                 if ($pdo->inTransaction()) {
+                     $pdo->rollBack();
+                 }
+                 throw $e;
+             }
+
+             // 3. Return updated post detail (ownerId will be passed by controller)
+             return self::findDetailById($id, null);
+         }
+
+         /** Helper: Generate UUID v4 standar (RFC 4122).
+          *
+          * @return string
+          */
+         public static function generateUuid(): string
+         {
+             $data = random_bytes(16);
+             $data[6] = chr(ord($data[6]) & 0x0f | 0x40); // versi 4
+             $data[8] = chr(ord($data[8]) & 0x3f | 0x80); // variant RFC 4122
+             return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
+         }
+     }
