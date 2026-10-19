@@ -17,6 +17,7 @@ require_once BASE_PATH . '/middlewares/OptionalAuthMiddleware.php';
 require_once BASE_PATH . '/controllers/AuthController.php';
 require_once BASE_PATH . '/controllers/ProfileController.php';
 require_once BASE_PATH . '/controllers/PostController.php';
+require_once BASE_PATH . '/controllers/CollabController.php';
 
 // ── Health Check: GET / ───────────────────────────────────────────────────────
 $router->get('/', function (array $params): void {
@@ -77,4 +78,8 @@ $router->post('/api/posts/:postId/comments', [AuthMiddleware::class, 'handle'], 
 $router->get('/api/posts/:postId/comments', [AuthMiddleware::class, 'handle'], [PostController::class, 'getComments']);
 $router->delete('/api/delete/comments/:commentId', [AuthMiddleware::class, 'handle'], [PostController::class, 'deleteComment']);
 $router->delete('/api/posts/:postId/comments/:commentId', [AuthMiddleware::class, 'handle'], [PostController::class, 'deleteComment']);
+
+// ── COLLABORATIONS MODULE ─────────────────────────────────────────────────────
+// Phase 4C: Create Collaboration + Auto-create Circle
+$router->post('/api/collab', [AuthMiddleware::class, 'handle'], [CollabController::class, 'createCollab']);
 

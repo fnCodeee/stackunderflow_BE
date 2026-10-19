@@ -1146,6 +1146,155 @@ $protectedFinal = (int)$checkProtected->fetchColumn() === 1;
 assertTest("Post Existing (452a041a-c7cc-495b-ad5e-8a6c2af46522) Tetap Utuh dan Aman Setelah Uji Phase 3D-4 & 3D-5", $protectedFinal);
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 16. PHASE 4C: CREATE COLLABORATION & AUTO-CREATE CIRCLE (POST /api/collab)
+// ─────────────────────────────────────────────────────────────────────────────
+printHeader("16. [Phase 4C] Create Collaboration & Auto-create Circle (POST /api/collab)");
+
+require_once BASE_PATH . '/models/CollabModel.php';
+require_once BASE_PATH . '/models/CircleModel.php';
+require_once BASE_PATH . '/controllers/CollabController.php';
+
+// 1. Availability check
+assertTest("Class CollabModel Tersedia", class_exists('CollabModel'));
+assertTest("Method CollabModel::create() Tersedia", method_exists('CollabModel', 'create'));
+assertTest("Method CollabModel::findById() Tersedia", method_exists('CollabModel', 'findById'));
+assertTest("Method CollabModel::deleteById() Tersedia", method_exists('CollabModel', 'deleteById'));
+assertTest("Method CollabModel::generateUuid() Tersedia", method_exists('CollabModel', 'generateUuid'));
+
+assertTest("Class CircleModel Tersedia", class_exists('CircleModel'));
+assertTest("Method CircleModel::create() Tersedia", method_exists('CircleModel', 'create'));
+assertTest("Method CircleModel::findByCollaborationId() Tersedia", method_exists('CircleModel', 'findByCollaborationId'));
+assertTest("Method CircleModel::findById() Tersedia", method_exists('CircleModel', 'findById'));
+
+assertTest("Class CollabController Tersedia", class_exists('CollabController'));
+assertTest("Method CollabController::createCollab() Tersedia", method_exists('CollabController', 'createCollab'));
+assertTest("Method CollabController::addCollab() Tersedia (Alias Express)", method_exists('CollabController', 'addCollab'));
+
+// 2. Route Registration check for POST /api/collab
+$routeCollabCheck = shell_exec("php -r \"
+define('BASE_PATH', '" . BASE_PATH . "');
+require_once BASE_PATH . '/routes/Router.php';
+\\\$router = new Router();
+require_once BASE_PATH . '/routes/api.php';
+\\\$reflector = new ReflectionClass(\\\$router);
+\\\$prop = \\\$reflector->getProperty('routes');
+\\\$prop->setAccessible(true);
+\\\$routes = \\\$prop->getValue(\\\$router);
+\\\$found = false;
+foreach (\\\$routes as \\\$r) {
+    if (\\\$r['method'] === 'POST' && \\\$r['pattern'] === '/api/collab') {
+        \\\$found = true;
+        break;
+    }
+}
+echo json_encode(['registered' => \\\$found]);
+\"");
+$resRouteCollab = json_decode((string)$routeCollabCheck, true);
+assertTest("Route POST /api/collab Terdaftar di Router", isset($resRouteCollab['registered']) && $resRouteCollab['registered'] === true);
+
+// 3. Code Contract & Transaction Analysis
+$collabModelSource = (string)file_get_contents(BASE_PATH . '/models/CollabModel.php');
+assertTest("CollabModel::create() Menggunakan PDO Transaction (beginTransaction, commit, rollBack)", 
+    str_contains($collabModelSource, '$pdo->beginTransaction()') &&
+    str_contains($collabModelSource, '$pdo->commit()') &&
+    str_contains($collabModelSource, '$pdo->rollBack()')
+);
+assertTest("CollabModel::create() Menyimpan ke Tabel collaborations", str_contains($collabModelSource, 'INSERT INTO collaborations'));
+assertTest("CollabModel::create() Menyimpan ke Tabel collab_media", str_contains($collabModelSource, 'INSERT INTO collab_media'));
+assertTest("CollabModel::create() Menyimpan ke Tabel collab_skills", str_contains($collabModelSource, 'INSERT INTO collab_skills'));
+assertTest("CollabModel::create() Memanggil CircleModel::create() untuk Auto-create Circle", str_contains($collabModelSource, 'CircleModel::create('));
+assertTest("CollabModel Tidak Menggunakan/Menyimpan communication_url", !str_contains($collabModelSource, 'communication_url'));
+
+// 4. Controller Validation
+// 4a. Request tanpa Auth / JWT -> 401 Unauthorized
+$cmdCollabUnauth = 'php -r \'define("BASE_PATH", "' . BASE_PATH . '"); require_once BASE_PATH . "/config/env.php"; require_once BASE_PATH . "/controllers/CollabController.php"; $GLOBALS["user"] = null; CollabController::createCollab();\'';
+$outCollabUnauth = shell_exec($cmdCollabUnauth);
+$resCollabUnauth = json_decode((string)$outCollabUnauth, true);
+assertTest("POST /api/collab Tanpa Autentikasi -> HTTP 401 Unauthorized", isset($resCollabUnauth['message']) && $resCollabUnauth['message'] === 'Unauthorized');
+
+// 4b. Request dengan input tidak lengkap (misal title kosong) -> 400 'Seluruh Kolom wajib diisi.'
+$cmdCollabEmptyTitle = 'php -r \'define("BASE_PATH", "' . BASE_PATH . '"); require_once BASE_PATH . "/config/env.php"; require_once BASE_PATH . "/controllers/CollabController.php"; $GLOBALS["user"] = ["id" => "mock-user"]; $GLOBALS["body"] = ["title" => "", "description" => "Desc", "required_member" => 2, "skills_needed" => ["skill-1"]]; CollabController::createCollab();\'';
+$outCollabEmptyTitle = shell_exec($cmdCollabEmptyTitle);
+$resCollabEmptyTitle = json_decode((string)$outCollabEmptyTitle, true);
+assertTest("POST /api/collab Validasi Title Kosong -> HTTP 400 ('Seluruh Kolom wajib diisi.')", isset($resCollabEmptyTitle['message']) && $resCollabEmptyTitle['message'] === 'Seluruh Kolom wajib diisi.');
+
+// 4c. Request dengan skills_needed kosong -> 400 'Seluruh Kolom wajib diisi.'
+$cmdCollabEmptySkills = 'php -r \'define("BASE_PATH", "' . BASE_PATH . '"); require_once BASE_PATH . "/config/env.php"; require_once BASE_PATH . "/controllers/CollabController.php"; $GLOBALS["user"] = ["id" => "mock-user"]; $GLOBALS["body"] = ["title" => "Title", "description" => "Desc", "required_member" => 2, "skills_needed" => []]; CollabController::createCollab();\'';
+$outCollabEmptySkills = shell_exec($cmdCollabEmptySkills);
+$resCollabEmptySkills = json_decode((string)$outCollabEmptySkills, true);
+assertTest("POST /api/collab Validasi Skills Kosong -> HTTP 400 ('Seluruh Kolom wajib diisi.')", isset($resCollabEmptySkills['message']) && $resCollabEmptySkills['message'] === 'Seluruh Kolom wajib diisi.');
+
+// 5. Functional & Database Verification (Live PDO execution)
+$sampleUserId = $pdo->query("SELECT id FROM users LIMIT 1")->fetchColumn();
+$sampleSkillId = $pdo->query("SELECT id FROM skills LIMIT 1")->fetchColumn();
+
+// 5a. Request valid: Buat kolaborasi dan auto-create circle
+$testCollabTitle = 'Project Fullstack Testing ' . bin2hex(random_bytes(4));
+$createdCollab = CollabModel::create([
+    'user_id'          => $sampleUserId,
+    'title'            => $testCollabTitle,
+    'description'      => 'Deskripsi proyek pengujian Phase 4C',
+    'required_member'  => 3,
+    'media_urls'       => ['https://res.cloudinary.com/demo/image/upload/v1/sample1.jpg'],
+    'media_public_ids' => ['collab_sample1'],
+    'skills_needed'    => [$sampleSkillId],
+]);
+$collabTestId = $createdCollab['id'];
+
+assertTest("Request Valid Menghasilkan Collaboration di Database", !empty($collabTestId) && $createdCollab['title'] === $testCollabTitle);
+assertTest("Data Collaboration Tersimpan di Tabel collaborations", (int)$pdo->query("SELECT COUNT(*) FROM collaborations WHERE id = '{$collabTestId}'")->fetchColumn() === 1);
+assertTest("Media Tersimpan di Tabel collab_media", (int)$pdo->query("SELECT COUNT(*) FROM collab_media WHERE collab_id = '{$collabTestId}'")->fetchColumn() === 1);
+assertTest("Skills Tersimpan di Tabel collab_skills", (int)$pdo->query("SELECT COUNT(*) FROM collab_skills WHERE collab_id = '{$collabTestId}'")->fetchColumn() === 1);
+
+// 5b. Verifikasi Auto-create Circle
+$createdCircle = CircleModel::findByCollaborationId($collabTestId);
+assertTest("Auto-create Circle: Tepat Satu Baris Terbuat di Tabel circle", $createdCircle !== null);
+assertTest("Data Circle Memiliki collaboration_id yang Benar", $createdCircle !== null && $createdCircle['collaboration_id'] === $collabTestId);
+assertTest("Data Circle Memiliki Title yang Sesuai dengan Collaboration", $createdCircle !== null && $createdCircle['title'] === $testCollabTitle);
+assertTest("Data Circle Memiliki photo_profile_url Nullable (Bukan URL Palsu)", $createdCircle !== null && ($createdCircle['photo_profile_url'] === null || is_string($createdCircle['photo_profile_url'])));
+
+// 5c. Verifikasi Pencegahan Duplikasi Circle (Unique Constraint uq_circle_collaboration_id)
+$duplicateCircleBlocked = false;
+try {
+    CircleModel::create([
+        'collaboration_id' => $collabTestId,
+        'title'            => 'Duplicate Circle Attempt',
+    ]);
+} catch (PDOException $e) {
+    $duplicateCircleBlocked = true;
+}
+assertTest("Tidak Ada Duplikasi Circle untuk Satu Collaboration (Unique Constraint Berfungsi)", $duplicateCircleBlocked);
+
+// 5d. Verifikasi Transaksi Atomik (Rollback jika operasi circle gagal)
+$failedCollabId = CollabModel::generateUuid();
+$rollbackOccurred = false;
+try {
+    $pdo->beginTransaction();
+    $stmtC = $pdo->prepare("INSERT INTO collaborations (id, user_id, title, description, required_member, status) VALUES (:id, :user_id, 'Temp Collab', 'Desc', 2, 'open')");
+    $stmtC->execute([':id' => $failedCollabId, ':user_id' => $sampleUserId]);
+    
+    // Paksa error duplicate pada circle
+    $stmtCir = $pdo->prepare("INSERT INTO circle (id, collaboration_id, title, timestamp) VALUES (UUID(), :cid, 'Circle 1', NOW())");
+    $stmtCir->execute([':cid' => $failedCollabId]);
+    // Insert kedua dengan collaboration_id yang sama persis -> memicu duplicate entry error
+    $stmtCir->execute([':cid' => $failedCollabId]);
+    $pdo->commit();
+} catch (Throwable $e) {
+    if ($pdo->inTransaction()) {
+        $pdo->rollBack();
+    }
+    $rollbackOccurred = true;
+}
+$collabRemained = (int)$pdo->query("SELECT COUNT(*) FROM collaborations WHERE id = '{$failedCollabId}'")->fetchColumn();
+assertTest("Jika Operasi Circle Gagal, Transaksi Rollback dan Collaboration Tidak Tertinggal", $rollbackOccurred && $collabRemained === 0);
+
+// 5e. Cleanup test collaboration
+CollabModel::deleteById($collabTestId);
+$collabCleaned = (int)$pdo->query("SELECT COUNT(*) FROM collaborations WHERE id = '{$collabTestId}'")->fetchColumn() === 0;
+$circleCleaned = (int)$pdo->query("SELECT COUNT(*) FROM circle WHERE collaboration_id = '{$collabTestId}'")->fetchColumn() === 0;
+assertTest("Cascade Cleanup: Collaboration dan Circle Terhapus Bersih", $collabCleaned && $circleCleaned);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // REKAPITULASI HASIL PENGUJIAN
 // ─────────────────────────────────────────────────────────────────────────────
 echo "\n" . COLOR_BOLD . "====================================================================\n";

@@ -175,60 +175,80 @@ CREATE TABLE IF NOT EXISTS comments (
 
 CREATE TABLE IF NOT EXISTS collaborations (
     id VARCHAR(36) NOT NULL DEFAULT (UUID()),
-    title VARCHAR(150) NOT NULL,
-    owner_id VARCHAR(36) NOT NULL,
-    status ENUM('open', 'close') NOT NULL DEFAULT 'open',
-    member_count INT NOT NULL DEFAULT 0,
-    skill_needed VARCHAR(150) NULL,
-    media_url VARCHAR(150) NULL,
-    timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    user_id VARCHAR(36) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    description TEXT NOT NULL,
+    required_member INT NOT NULL DEFAULT 1,
+    communication_url VARCHAR(255) NULL,
+    status ENUM('open', 'closed') NOT NULL DEFAULT 'open',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
     PRIMARY KEY (id),
-    KEY idx_collaborations_owner_id (owner_id),
+    KEY idx_collaborations_user_id (user_id),
     KEY idx_collaborations_status (status),
+    KEY idx_collaborations_created_at (created_at),
 
-    CONSTRAINT fk_collaborations_owner
-        FOREIGN KEY (owner_id) REFERENCES users(id)
+    CONSTRAINT fk_collaborations_user
+        FOREIGN KEY (user_id) REFERENCES users(id)
         ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE IF NOT EXISTS collaboration_skill (
+CREATE TABLE IF NOT EXISTS collab_media (
     id VARCHAR(36) NOT NULL DEFAULT (UUID()),
-    skill_id VARCHAR(36) NOT NULL,
-    collaboration_id VARCHAR(36) NOT NULL,
+    collab_id VARCHAR(36) NOT NULL,
+    media_url VARCHAR(255) NOT NULL,
+    media_public_id VARCHAR(255) NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
     PRIMARY KEY (id),
-    UNIQUE KEY uq_collaboration_skill (collaboration_id, skill_id),
-    KEY idx_collaboration_skill_skill_id (skill_id),
-    KEY idx_collaboration_skill_collaboration_id (collaboration_id),
+    KEY idx_collab_media_collab_id (collab_id),
 
-    CONSTRAINT fk_collaboration_skill_skill
-        FOREIGN KEY (skill_id) REFERENCES skills(id)
+    CONSTRAINT fk_collab_media_collab
+        FOREIGN KEY (collab_id) REFERENCES collaborations(id)
+        ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS collab_skills (
+    id VARCHAR(36) NOT NULL DEFAULT (UUID()),
+    collab_id VARCHAR(36) NOT NULL,
+    skill_id VARCHAR(36) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_collab_skills (collab_id, skill_id),
+    KEY idx_collab_skills_collab_id (collab_id),
+    KEY idx_collab_skills_skill_id (skill_id),
+
+    CONSTRAINT fk_collab_skills_collab
+        FOREIGN KEY (collab_id) REFERENCES collaborations(id)
         ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT fk_collaboration_skill_collaboration
-        FOREIGN KEY (collaboration_id) REFERENCES collaborations(id)
+    CONSTRAINT fk_collab_skills_skill
+        FOREIGN KEY (skill_id) REFERENCES skills(id)
         ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS collaboration_applications (
     id VARCHAR(36) NOT NULL DEFAULT (UUID()),
     user_id VARCHAR(36) NOT NULL,
-    collaboration_id VARCHAR(36) NOT NULL,
-    message VARCHAR(150) NULL,
-    status ENUM('pending', 'reject', 'accept') NOT NULL DEFAULT 'pending',
-    timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    collab_id VARCHAR(36) NOT NULL,
+    message TEXT NULL,
+    status ENUM('pending', 'accepted', 'rejected') NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
     PRIMARY KEY (id),
-    UNIQUE KEY uq_collaboration_application (user_id, collaboration_id),
-    KEY idx_applications_user_id (user_id),
-    KEY idx_applications_collaboration_id (collaboration_id),
-    KEY idx_applications_status (status),
+    UNIQUE KEY uq_collab_application (user_id, collab_id),
+    KEY idx_collab_app_user_id (user_id),
+    KEY idx_collab_app_collab_id (collab_id),
+    KEY idx_collab_app_status (status),
 
-    CONSTRAINT fk_applications_user
+    CONSTRAINT fk_collab_app_user
         FOREIGN KEY (user_id) REFERENCES users(id)
         ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT fk_applications_collaboration
-        FOREIGN KEY (collaboration_id) REFERENCES collaborations(id)
+    CONSTRAINT fk_collab_app_collab
+        FOREIGN KEY (collab_id) REFERENCES collaborations(id)
         ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -240,16 +260,17 @@ CREATE TABLE IF NOT EXISTS user_collaboration (
     id VARCHAR(36) NOT NULL DEFAULT (UUID()),
     user_id VARCHAR(36) NOT NULL,
     collaboration_id VARCHAR(36) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (id),
     UNIQUE KEY uq_user_collaboration (user_id, collaboration_id),
-    KEY idx_user_collaboration_user_id (user_id),
-    KEY idx_user_collaboration_collaboration_id (collaboration_id),
+    KEY idx_user_collab_user_id (user_id),
+    KEY idx_user_collab_collab_id (collaboration_id),
 
-    CONSTRAINT fk_user_collaboration_user
+    CONSTRAINT fk_user_collab_user
         FOREIGN KEY (user_id) REFERENCES users(id)
         ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT fk_user_collaboration_collaboration
+    CONSTRAINT fk_user_collab_collab
         FOREIGN KEY (collaboration_id) REFERENCES collaborations(id)
         ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -257,10 +278,12 @@ CREATE TABLE IF NOT EXISTS user_collaboration (
 CREATE TABLE IF NOT EXISTS circle (
     id VARCHAR(36) NOT NULL DEFAULT (UUID()),
     collaboration_id VARCHAR(36) NOT NULL,
-    title VARCHAR(150) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    photo_profile_url VARCHAR(255) NULL DEFAULT NULL,
     timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (id),
+    UNIQUE KEY uq_circle_collaboration_id (collaboration_id),
     KEY idx_circle_collaboration_id (collaboration_id),
 
     CONSTRAINT fk_circle_collaboration
