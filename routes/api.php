@@ -83,3 +83,14 @@ $router->delete('/api/posts/:postId/comments/:commentId', [AuthMiddleware::class
 // Phase 4C: Create Collaboration + Auto-create Circle
 $router->post('/api/collab', [AuthMiddleware::class, 'handle'], [CollabController::class, 'createCollab']);
 
+// Phase 4D: Read Collaborations (auth required — sesuai Express baseline)
+$router->get('/api/collab', [AuthMiddleware::class, 'handle'], [CollabController::class, 'showCollab']);
+$router->get('/api/collab/:id', [AuthMiddleware::class, 'handle'], [CollabController::class, 'getCollabDetail']);
+$router->get('/api/profiles/:userId/collab', [AuthMiddleware::class, 'handle'], [CollabController::class, 'yourCollabPost']);
+
+// Phase 4E: Update Collaboration (auth required — sesuai Express baseline)
+$router->put('/api/collab/:id', [AuthMiddleware::class, 'handle'], [CollabController::class, 'updateCollab']);
+
+// Phase 4F: Delete Collaboration (auth required — sesuai Express baseline)
+$router->delete('/api/collab/:id', [AuthMiddleware::class, 'handle'], [CollabController::class, 'deleteCollab']);
+

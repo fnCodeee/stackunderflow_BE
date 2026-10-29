@@ -98,6 +98,57 @@ class CircleModel
     }
 
     /**
+     * Memperbarui title circle berdasarkan collaboration_id.
+     * Digunakan untuk sinkronisasi judul circle saat judul collaboration di-update.
+     *
+     * @param  string $collabId
+     * @param  string $title
+     * @param  PDO|null $pdo
+     * @return bool
+     */
+    public static function updateTitleByCollaborationId(string $collabId, string $title, ?PDO $pdo = null): bool
+    {
+        $db = $pdo ?? getDB();
+        $stmt = $db->prepare("UPDATE circle SET title = :title WHERE collaboration_id = :collaboration_id");
+        return $stmt->execute([
+            ':title'            => $title,
+            ':collaboration_id' => $collabId,
+        ]);
+    }
+
+    /**
+     * Memperbarui data circle secara fleksibel berdasarkan collaboration_id.
+     *
+     * @param  string $collabId
+     * @param  array<string, mixed> $data
+     * @param  PDO|null $pdo
+     * @return bool
+     */
+    public static function updateByCollaborationId(string $collabId, array $data, ?PDO $pdo = null): bool
+    {
+        $db = $pdo ?? getDB();
+        $fields = [];
+        $params = [':collaboration_id' => $collabId];
+
+        if (array_key_exists('title', $data)) {
+            $fields[] = "title = :title";
+            $params[':title'] = $data['title'];
+        }
+        if (array_key_exists('photo_profile_url', $data)) {
+            $fields[] = "photo_profile_url = :photo_profile_url";
+            $params[':photo_profile_url'] = $data['photo_profile_url'];
+        }
+
+        if (empty($fields)) {
+            return true;
+        }
+
+        $sql = "UPDATE circle SET " . implode(', ', $fields) . " WHERE collaboration_id = :collaboration_id";
+        $stmt = $db->prepare($sql);
+        return $stmt->execute($params);
+    }
+
+    /**
      * Menghapus circle berdasarkan collaboration_id.
      *
      * @param  string $collabId

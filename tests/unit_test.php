@@ -1224,6 +1224,35 @@ $outCollabEmptySkills = shell_exec($cmdCollabEmptySkills);
 $resCollabEmptySkills = json_decode((string)$outCollabEmptySkills, true);
 assertTest("POST /api/collab Validasi Skills Kosong -> HTTP 400 ('Seluruh Kolom wajib diisi.')", isset($resCollabEmptySkills['message']) && $resCollabEmptySkills['message'] === 'Seluruh Kolom wajib diisi.');
 
+// 4d. Request dengan skill_id yang tidak terdaftar di database -> 400 'Terdapat skill ID yang tidak valid atau tidak ditemukan'
+$cmdCollabInvalidSkill = 'php -r \'define("BASE_PATH", "' . BASE_PATH . '"); require_once BASE_PATH . "/config/env.php"; require_once BASE_PATH . "/controllers/CollabController.php"; $GLOBALS["user"] = ["id" => "mock-user"]; $GLOBALS["body"] = ["title" => "Title", "description" => "Desc", "required_member" => 2, "skills_needed" => ["non-existent-skill-uuid-999"]]; CollabController::createCollab();\'';
+$outCollabInvalidSkill = shell_exec($cmdCollabInvalidSkill);
+$resCollabInvalidSkill = json_decode((string)$outCollabInvalidSkill, true);
+assertTest("POST /api/collab Validasi Skill Tidak Terdaftar -> HTTP 400 ('Terdapat skill ID yang tidak valid atau tidak ditemukan')", 
+    isset($resCollabInvalidSkill['message']) && $resCollabInvalidSkill['message'] === 'Terdapat skill ID yang tidak valid atau tidak ditemukan' && $resCollabInvalidSkill['success'] === false
+);
+
+// 4e. Verifikasi CollabModel::create melempar InvalidArgumentException dan rollback jika skill_id tidak ada
+$sampleUserIdForRollback = $pdo->query("SELECT id FROM users LIMIT 1")->fetchColumn();
+$invalidSkillRollbackOccurred = false;
+$dummyCollabId = CollabModel::generateUuid();
+try {
+    CollabModel::create([
+        'id'              => $dummyCollabId,
+        'user_id'         => $sampleUserIdForRollback,
+        'title'           => 'Collab With Invalid Skill',
+        'description'     => 'Should be rolled back completely',
+        'required_member' => 2,
+        'skills_needed'   => ['non-existent-skill-uuid-888'],
+    ]);
+} catch (InvalidArgumentException $e) {
+    $invalidSkillRollbackOccurred = true;
+}
+$dummyCollabExists = (int)$pdo->query("SELECT COUNT(*) FROM collaborations WHERE id = '{$dummyCollabId}'")->fetchColumn() > 0;
+$dummyCircleExists = (int)$pdo->query("SELECT COUNT(*) FROM circle WHERE collaboration_id = '{$dummyCollabId}'")->fetchColumn() > 0;
+assertTest("CollabModel::create() Melempar InvalidArgumentException untuk Skill Tidak Valid", $invalidSkillRollbackOccurred);
+assertTest("Transaksi Rollback Menjamin Tidak Ada Collaboration atau Circle Parsial Tersimpan", !$dummyCollabExists && !$dummyCircleExists);
+
 // 5. Functional & Database Verification (Live PDO execution)
 $sampleUserId = $pdo->query("SELECT id FROM users LIMIT 1")->fetchColumn();
 $sampleSkillId = $pdo->query("SELECT id FROM skills LIMIT 1")->fetchColumn();
@@ -1293,6 +1322,321 @@ CollabModel::deleteById($collabTestId);
 $collabCleaned = (int)$pdo->query("SELECT COUNT(*) FROM collaborations WHERE id = '{$collabTestId}'")->fetchColumn() === 0;
 $circleCleaned = (int)$pdo->query("SELECT COUNT(*) FROM circle WHERE collaboration_id = '{$collabTestId}'")->fetchColumn() === 0;
 assertTest("Cascade Cleanup: Collaboration dan Circle Terhapus Bersih", $collabCleaned && $circleCleaned);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 17. PHASE 4D: READ COLLABORATION (GET /api/collab, GET /api/collab/:id, GET /api/profiles/:userId/collab)
+// ─────────────────────────────────────────────────────────────────────────────
+printHeader("17. [Phase 4D] Read Collaboration (GET /api/collab, GET /api/collab/:id, GET /api/profiles/:userId/collab)");
+
+// 1. Availability check
+assertTest("Method CollabModel::getAll() Tersedia", method_exists('CollabModel', 'getAll'));
+assertTest("Method CollabModel::findDetailById() Tersedia", method_exists('CollabModel', 'findDetailById'));
+assertTest("Method CollabModel::getByUserId() Tersedia", method_exists('CollabModel', 'getByUserId'));
+
+assertTest("Method CollabController::showCollab() Tersedia", method_exists('CollabController', 'showCollab'));
+assertTest("Method CollabController::getCollabDetail() Tersedia", method_exists('CollabController', 'getCollabDetail'));
+assertTest("Method CollabController::yourCollabPost() Tersedia", method_exists('CollabController', 'yourCollabPost'));
+
+// 2. Route Registration checks
+$routeCheck4D = shell_exec("php -r \"
+define('BASE_PATH', '" . BASE_PATH . "');
+require_once BASE_PATH . '/routes/Router.php';
+\\\$router = new Router();
+require_once BASE_PATH . '/routes/api.php';
+\\\$reflector = new ReflectionClass(\\\$router);
+\\\$prop = \\\$reflector->getProperty('routes');
+\\\$prop->setAccessible(true);
+\\\$routes = \\\$prop->getValue(\\\$router);
+
+\\\$getCollab = false;
+\\\$getCollabDetail = false;
+\\\$getUserCollab = false;
+
+foreach (\\\$routes as \\\$r) {
+    if (\\\$r['method'] === 'GET' && \\\$r['pattern'] === '/api/collab') \\\$getCollab = true;
+    if (\\\$r['method'] === 'GET' && \\\$r['pattern'] === '/api/collab/:id') \\\$getCollabDetail = true;
+    if (\\\$r['method'] === 'GET' && \\\$r['pattern'] === '/api/profiles/:userId/collab') \\\$getUserCollab = true;
+}
+echo json_encode([
+    'getCollab' => \\\$getCollab,
+    'getCollabDetail' => \\\$getCollabDetail,
+    'getUserCollab' => \\\$getUserCollab
+]);
+\"");
+$resRoute4D = json_decode((string)$routeCheck4D, true);
+assertTest("Route GET /api/collab Terdaftar di Router", isset($resRoute4D['getCollab']) && $resRoute4D['getCollab'] === true);
+assertTest("Route GET /api/collab/:id Terdaftar di Router", isset($resRoute4D['getCollabDetail']) && $resRoute4D['getCollabDetail'] === true);
+assertTest("Route GET /api/profiles/:userId/collab Terdaftar di Router", isset($resRoute4D['getUserCollab']) && $resRoute4D['getUserCollab'] === true);
+
+// 3. Authentication checks (401 Unauthorized jika tanpa token/user)
+$cmdShowUnauth = 'php -r \'define("BASE_PATH", "' . BASE_PATH . '"); require_once BASE_PATH . "/config/env.php"; require_once BASE_PATH . "/controllers/CollabController.php"; $GLOBALS["user"] = null; CollabController::showCollab();\'';
+$resShowUnauth = json_decode((string)shell_exec($cmdShowUnauth), true);
+assertTest("GET /api/collab Tanpa Autentikasi -> HTTP 401 Unauthorized", isset($resShowUnauth['message']) && $resShowUnauth['message'] === 'Unauthorized');
+
+$cmdDetailUnauth = 'php -r \'define("BASE_PATH", "' . BASE_PATH . '"); require_once BASE_PATH . "/config/env.php"; require_once BASE_PATH . "/controllers/CollabController.php"; $GLOBALS["user"] = null; CollabController::getCollabDetail(["id" => "fake-id"]);\'';
+$resDetailUnauth = json_decode((string)shell_exec($cmdDetailUnauth), true);
+assertTest("GET /api/collab/:id Tanpa Autentikasi -> HTTP 401 Unauthorized", isset($resDetailUnauth['message']) && $resDetailUnauth['message'] === 'Unauthorized');
+
+$cmdUserCollabUnauth = 'php -r \'define("BASE_PATH", "' . BASE_PATH . '"); require_once BASE_PATH . "/config/env.php"; require_once BASE_PATH . "/controllers/CollabController.php"; $GLOBALS["user"] = null; CollabController::yourCollabPost(["userId" => "fake-user"]);\'';
+$resUserCollabUnauth = json_decode((string)shell_exec($cmdUserCollabUnauth), true);
+assertTest("GET /api/profiles/:userId/collab Tanpa Autentikasi -> HTTP 401 Unauthorized", isset($resUserCollabUnauth['message']) && $resUserCollabUnauth['message'] === 'Unauthorized');
+
+// 4. Real Database Functional Testing
+// Ambil 2 user berbeda untuk pengujian isolasi data
+$usersSample = $pdo->query("SELECT id, username FROM users LIMIT 2")->fetchAll();
+$userAId = $usersSample[0]['id'];
+$userAName = $usersSample[0]['username'];
+$userBId = $usersSample[1]['id'];
+$userBName = $usersSample[1]['username'];
+
+$skillsSample = $pdo->query("SELECT id FROM skills LIMIT 2")->fetchAll(PDO::FETCH_COLUMN);
+$skillAId = $skillsSample[0];
+$skillBId = $skillsSample[1] ?? $skillsSample[0];
+
+// Buat Collab A oleh User A
+$collabA = CollabModel::create([
+    'user_id'          => $userAId,
+    'title'            => 'Collab A by User A ' . bin2hex(random_bytes(3)),
+    'description'      => 'Deskripsi Kolaborasi A',
+    'required_member'  => 2,
+    'media_urls'       => ['https://res.cloudinary.com/test/imageA.png'],
+    'media_public_ids' => ['media_pub_a'],
+    'skills_needed'    => [$skillAId],
+]);
+$collabAId = $collabA['id'];
+
+// Buat Collab B oleh User B
+$collabB = CollabModel::create([
+    'user_id'          => $userBId,
+    'title'            => 'Collab B by User B ' . bin2hex(random_bytes(3)),
+    'description'      => 'Deskripsi Kolaborasi B',
+    'required_member'  => 5,
+    'media_urls'       => ['https://res.cloudinary.com/test/imageB.png'],
+    'media_public_ids' => ['media_pub_b'],
+    'skills_needed'    => [$skillBId],
+]);
+$collabBId = $collabB['id'];
+
+// 4a. Pengujian GET /api/collab (Daftar seluruh kolaborasi)
+$cmdGetAll = 'php -r \'define("BASE_PATH", "' . BASE_PATH . '"); require_once BASE_PATH . "/config/env.php"; require_once BASE_PATH . "/controllers/CollabController.php"; $GLOBALS["user"] = ["id" => "' . $userAId . '"]; CollabController::showCollab();\'';
+$resGetAll = json_decode((string)shell_exec($cmdGetAll), true);
+assertTest("GET /api/collab Menghasilkan HTTP 200 dan Message 'Get All Posts Collaboration!'", 
+    isset($resGetAll['success']) && $resGetAll['success'] === true && $resGetAll['message'] === 'Get All Posts Collaboration!'
+);
+assertTest("GET /api/collab Mengembalikan Data List Array", isset($resGetAll['data']) && is_array($resGetAll['data']));
+
+$foundCollabAInList = false;
+$foundCollabBInList = false;
+foreach ($resGetAll['data'] as $item) {
+    if ($item['id'] === $collabAId) $foundCollabAInList = true;
+    if ($item['id'] === $collabBId) $foundCollabBInList = true;
+}
+assertTest("GET /api/collab Memuat Collab A dan Collab B dalam Daftar", $foundCollabAInList && $foundCollabBInList);
+
+// Verifikasi struktur ownerId pada list
+$firstCollabItem = $resGetAll['data'][0] ?? [];
+assertTest("Item Collab Memiliki Object ownerId dengan username & photo_profile_url", 
+    isset($firstCollabItem['ownerId']['username'], $firstCollabItem['ownerId']['photo_profile_url'])
+);
+assertTest("Item Collab Memiliki Data circle yang Terhubung", 
+    isset($firstCollabItem['circle']['id'], $firstCollabItem['circle']['collaboration_id'])
+);
+
+// 4b. Pengujian GET /api/collab/:id (Detail Kolaborasi)
+$cmdGetDetail = 'php -r \'define("BASE_PATH", "' . BASE_PATH . '"); require_once BASE_PATH . "/config/env.php"; require_once BASE_PATH . "/controllers/CollabController.php"; $GLOBALS["user"] = ["id" => "' . $userAId . '"]; CollabController::getCollabDetail(["id" => "' . $collabAId . '"]);\'';
+$resGetDetail = json_decode((string)shell_exec($cmdGetDetail), true);
+
+assertTest("GET /api/collab/:id Menghasilkan HTTP 200 dan Message 'Detail collaboration'", 
+    isset($resGetDetail['success']) && $resGetDetail['success'] === true && $resGetDetail['message'] === 'Detail collaboration'
+);
+assertTest("Detail Collab Mengembalikan ID dan Title yang Tepat", 
+    isset($resGetDetail['data']['id']) && $resGetDetail['data']['id'] === $collabAId && $resGetDetail['data']['title'] === $collabA['title']
+);
+assertTest("Detail Collab Mengembalikan Media Collab A secara Akurat (Tanpa Tertukar dengan Collab B)", 
+    isset($resGetDetail['data']['media_urls'][0]) && $resGetDetail['data']['media_urls'][0] === 'https://res.cloudinary.com/test/imageA.png'
+);
+assertTest("Detail Collab Mengembalikan Circle yang Terhubung dengan Collab A", 
+    isset($resGetDetail['data']['circle']['collaboration_id']) && $resGetDetail['data']['circle']['collaboration_id'] === $collabAId
+);
+
+// 4c. Pengujian GET /api/collab/:id dengan ID tidak ditemukan -> HTTP 404
+$cmdGetDetailNotFound = 'php -r \'define("BASE_PATH", "' . BASE_PATH . '"); require_once BASE_PATH . "/config/env.php"; require_once BASE_PATH . "/controllers/CollabController.php"; $GLOBALS["user"] = ["id" => "' . $userAId . '"]; CollabController::getCollabDetail(["id" => "non-existent-uuid"]);\'';
+$resGetDetailNotFound = json_decode((string)shell_exec($cmdGetDetailNotFound), true);
+assertTest("GET /api/collab/:id ID Tidak Ditemukan -> HTTP 404 ('Collaboration not found')", 
+    isset($resGetDetailNotFound['message']) && $resGetDetailNotFound['message'] === 'Collaboration not found' && $resGetDetailNotFound['success'] === false
+);
+
+// 4d. Pengujian GET /api/profiles/:userId/collab (User Collaboration List)
+$cmdUserACollab = 'php -r \'define("BASE_PATH", "' . BASE_PATH . '"); require_once BASE_PATH . "/config/env.php"; require_once BASE_PATH . "/controllers/CollabController.php"; $GLOBALS["user"] = ["id" => "' . $userAId . '"]; CollabController::yourCollabPost(["userId" => "' . $userAId . '"]);\'';
+$resUserACollab = json_decode((string)shell_exec($cmdUserACollab), true);
+
+assertTest("GET /api/profiles/:userId/collab Menghasilkan HTTP 200 dan Message 'Your Collaboration Post, <username>'", 
+    isset($resUserACollab['success']) && $resUserACollab['success'] === true && str_contains($resUserACollab['message'], "Your Collaboration Post, {$userAName}")
+);
+assertTest("GET /api/profiles/:userId/collab User A Hanya Mengembalikan Collab Milik User A", 
+    isset($resUserACollab['data']) && count($resUserACollab['data']) >= 1 && $resUserACollab['data'][0]['id'] === $collabAId
+);
+// Pastikan tidak ada Collab B milik User B di dalam list User A
+$hasCollabBInUserA = false;
+foreach ($resUserACollab['data'] as $it) {
+    if ($it['id'] === $collabBId) $hasCollabBInUserA = true;
+}
+assertTest("Isolasi Data: Collab B Milik User B Tidak Muncul pada Endpoint User A", !$hasCollabBInUserA);
+
+// 4e. Pengujian GET /api/profiles/:userId/collab untuk user yang belum memiliki collab -> HTTP 404
+$randomUserId = CollabModel::generateUuid();
+$cmdUserNoCollab = 'php -r \'define("BASE_PATH", "' . BASE_PATH . '"); require_once BASE_PATH . "/config/env.php"; require_once BASE_PATH . "/controllers/CollabController.php"; $GLOBALS["user"] = ["id" => "' . $userAId . '"]; CollabController::yourCollabPost(["userId" => "' . $randomUserId . '"]);\'';
+$resUserNoCollab = json_decode((string)shell_exec($cmdUserNoCollab), true);
+assertTest("GET /api/profiles/:userId/collab User Tanpa Collab -> HTTP 404 ('Collaboration Post not found!')", 
+    isset($resUserNoCollab['message']) && $resUserNoCollab['message'] === 'Collaboration Post not found!' && $resUserNoCollab['success'] === false
+);
+
+// 4f. Verifikasi Endpoint Create Tetap Berfungsi dengan Baik
+$collabRegressTitle = 'Regression Check Collab ' . bin2hex(random_bytes(3));
+$createdRegress = CollabModel::create([
+    'user_id'         => $userAId,
+    'title'           => $collabRegressTitle,
+    'description'     => 'Verifikasi regresi create collab',
+    'required_member' => 2,
+    'skills_needed'   => [$skillAId],
+]);
+assertTest("Verifikasi Endpoint Create Tetap Berfungsi dengan Auto-create Circle", 
+    isset($createdRegress['id'], $createdRegress['circle']['id']) && $createdRegress['circle']['collaboration_id'] === $createdRegress['id']
+);
+
+// Cleanup seluruh test collaborations
+CollabModel::deleteById($collabAId);
+CollabModel::deleteById($collabBId);
+CollabModel::deleteById($createdRegress['id']);
+$allCleaned = (int)$pdo->query("SELECT COUNT(*) FROM collaborations WHERE id IN ('{$collabAId}', '{$collabBId}', '{$createdRegress['id']}')")->fetchColumn() === 0;
+assertTest("Cleanup Data Uji Phase 4D Bersih dari Database", $allCleaned);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 18. PHASE 4F: DELETE COLLABORATION (DELETE /api/collab/:id)
+// ─────────────────────────────────────────────────────────────────────────────
+printHeader("18. [Phase 4F] Delete Collaboration (DELETE /api/collab/:id)");
+
+// 1. Availability check
+assertTest("Method CollabModel::delete() Tersedia", method_exists('CollabModel', 'delete'));
+assertTest("Method CollabController::deleteCollab() Tersedia", method_exists('CollabController', 'deleteCollab'));
+
+// 2. Route registration check for DELETE /api/collab/:id
+$routeCollabDeleteTest = BASE_PATH . '/tests/_route_collab_delete_test.php';
+file_put_contents($routeCollabDeleteTest, '<?php
+define(\'BASE_PATH\', \'' . BASE_PATH . '\');
+require_once BASE_PATH . \'/routes/Router.php\';
+$router = new Router();
+require_once BASE_PATH . \'/routes/api.php\';
+$reflector = new ReflectionClass($router);
+$prop = $reflector->getProperty(\'routes\');
+$prop->setAccessible(true);
+$routes = $prop->getValue($router);
+$found = false;
+foreach ($routes as $r) {
+    if ($r[\'method\'] === \'DELETE\' && $r[\'pattern\'] === \'/api/collab/:id\') {
+        $found = true;
+        break;
+    }
+}
+echo json_encode([\'registered\' => $found]);
+');
+$routeCollabDeleteCheck = shell_exec("php " . $routeCollabDeleteTest);
+@unlink($routeCollabDeleteTest);
+$resRouteCollabDelete = json_decode((string)$routeCollabDeleteCheck, true);
+assertTest("Route DELETE /api/collab/:id Terdaftar di Router", isset($resRouteCollabDelete['registered']) && $resRouteCollabDelete['registered'] === true);
+
+// 3. Tes Hapus Tanpa Autentikasi -> HTTP 401 Unauthorized
+$cmdDeleteUnauth = 'php -r \'define("BASE_PATH", "' . BASE_PATH . '"); require_once BASE_PATH . "/config/env.php"; require_once BASE_PATH . "/controllers/CollabController.php"; $GLOBALS["user"] = null; CollabController::deleteCollab(["id" => "dummy-uuid"]);\'';
+$resDeleteUnauth = json_decode((string)shell_exec($cmdDeleteUnauth), true);
+assertTest("DELETE /api/collab/:id Tanpa Autentikasi -> HTTP 401 Unauthorized", 
+    isset($resDeleteUnauth['message']) && $resDeleteUnauth['message'] === 'Unauthorized' && $resDeleteUnauth['success'] === false
+);
+
+// 4. Tes Hapus Collab yang Tidak Ada -> HTTP 404
+$cmdDeleteNotFound = 'php -r \'define("BASE_PATH", "' . BASE_PATH . '"); require_once BASE_PATH . "/config/env.php"; require_once BASE_PATH . "/controllers/CollabController.php"; $GLOBALS["user"] = ["id" => "' . $userAId . '"]; CollabController::deleteCollab(["id" => "non-existent-collab-id"]);\'';
+$resDeleteNotFound = json_decode((string)shell_exec($cmdDeleteNotFound), true);
+assertTest("DELETE /api/collab/:id ID Tidak Ditemukan -> HTTP 404 ('Collaboration Post not found!')", 
+    isset($resDeleteNotFound['message']) && $resDeleteNotFound['message'] === 'Collaboration Post not found!' && $resDeleteNotFound['success'] === false
+);
+
+// 5. Buat Collab Khusus Pengujian Delete oleh User A
+$testDeleteCollab = CollabModel::create([
+    'user_id'          => $userAId,
+    'title'            => 'Collab To Be Deleted ' . bin2hex(random_bytes(3)),
+    'description'      => 'Deskripsi uji coba delete collaboration',
+    'required_member'  => 3,
+    'media_urls'       => ['https://res.cloudinary.com/test/del_image.png'],
+    'media_public_ids' => ['del_media_pub_id'],
+    'skills_needed'    => [$skillAId],
+]);
+$testDeleteCollabId = $testDeleteCollab['id'];
+
+// Tambahkan data relasi tambahan: collaboration_applications dan user_collaboration
+$appId = CollabModel::generateUuid();
+$pdo->prepare("
+    INSERT INTO collaboration_applications (id, user_id, collab_id, message, status)
+    VALUES (:id, :user_id, :collab_id, 'Mau join collab ini', 'pending')
+")->execute([':id' => $appId, ':user_id' => $userBId, ':collab_id' => $testDeleteCollabId]);
+
+$userCollabId = CollabModel::generateUuid();
+$pdo->prepare("
+    INSERT INTO user_collaboration (id, user_id, collaboration_id)
+    VALUES (:id, :user_id, :collab_id)
+")->execute([':id' => $userCollabId, ':user_id' => $userBId, ':collab_id' => $testDeleteCollabId]);
+
+// Verifikasi sebelum dihapus, data utama dan seluruh relasi benar-benar ada di database
+$hasCollabRow = (int)$pdo->query("SELECT COUNT(*) FROM collaborations WHERE id = '{$testDeleteCollabId}'")->fetchColumn() === 1;
+$hasMediaRow  = (int)$pdo->query("SELECT COUNT(*) FROM collab_media WHERE collab_id = '{$testDeleteCollabId}'")->fetchColumn() === 1;
+$hasSkillRow  = (int)$pdo->query("SELECT COUNT(*) FROM collab_skills WHERE collab_id = '{$testDeleteCollabId}'")->fetchColumn() === 1;
+$hasCircleRow = (int)$pdo->query("SELECT COUNT(*) FROM circle WHERE collaboration_id = '{$testDeleteCollabId}'")->fetchColumn() === 1;
+$hasAppRow    = (int)$pdo->query("SELECT COUNT(*) FROM collaboration_applications WHERE collab_id = '{$testDeleteCollabId}'")->fetchColumn() === 1;
+$hasUserColRow= (int)$pdo->query("SELECT COUNT(*) FROM user_collaboration WHERE collaboration_id = '{$testDeleteCollabId}'")->fetchColumn() === 1;
+assertTest("Data Collab dan Seluruh Child Tables (Media, Skills, Circle, App, UserCollab) Siap Sebelum Uji Hapus", 
+    $hasCollabRow && $hasMediaRow && $hasSkillRow && $hasCircleRow && $hasAppRow && $hasUserColRow
+);
+
+// 6. Tes Hapus oleh Bukan Pemilik (Non-Owner: User B) -> HTTP 403 Forbidden
+$cmdDeleteForbidden = 'php -r \'define("BASE_PATH", "' . BASE_PATH . '"); require_once BASE_PATH . "/config/env.php"; require_once BASE_PATH . "/controllers/CollabController.php"; $GLOBALS["user"] = ["id" => "' . $userBId . '"]; CollabController::deleteCollab(["id" => "' . $testDeleteCollabId . '"]);\'';
+$resDeleteForbidden = json_decode((string)shell_exec($cmdDeleteForbidden), true);
+assertTest("DELETE /api/collab/:id Oleh Non-Owner -> HTTP 403 ('Bukan hak lu buat edit postingan ini!')", 
+    isset($resDeleteForbidden['message']) && $resDeleteForbidden['message'] === 'Bukan hak lu buat edit postingan ini!' && $resDeleteForbidden['success'] === false
+);
+
+// Pastikan data TIDAK terhapus saat ditolak hak aksesnya
+$stillExistsAfterForbidden = (int)$pdo->query("SELECT COUNT(*) FROM collaborations WHERE id = '{$testDeleteCollabId}'")->fetchColumn() === 1;
+assertTest("Data Collab Tetap Aman dan Tidak Terhapus Setelah Percobaan Akses Ditolak", $stillExistsAfterForbidden);
+
+// 7. Tes Hapus oleh Pemilik Asli (Owner: User A) -> HTTP 200 OK
+$cmdDeleteSuccess = 'php -r \'define("BASE_PATH", "' . BASE_PATH . '"); require_once BASE_PATH . "/config/env.php"; require_once BASE_PATH . "/controllers/CollabController.php"; $GLOBALS["user"] = ["id" => "' . $userAId . '"]; CollabController::deleteCollab(["id" => "' . $testDeleteCollabId . '"]);\'';
+$resDeleteSuccess = json_decode((string)shell_exec($cmdDeleteSuccess), true);
+assertTest("DELETE /api/collab/:id Oleh Owner -> HTTP 200 ('Postingan kolaborasi berhasil dihapus!')", 
+    isset($resDeleteSuccess['success']) && $resDeleteSuccess['success'] === true && $resDeleteSuccess['message'] === 'Postingan kolaborasi berhasil dihapus!'
+);
+assertTest("Response Data Memuat Object Collab yang Dihapus", 
+    isset($resDeleteSuccess['data']['id']) && $resDeleteSuccess['data']['id'] === $testDeleteCollabId
+);
+
+// 8. Verifikasi Database: Relasi Terhapus Sempurna (Cascade Verification)
+$collabDeleted = (int)$pdo->query("SELECT COUNT(*) FROM collaborations WHERE id = '{$testDeleteCollabId}'")->fetchColumn() === 0;
+$mediaDeleted  = (int)$pdo->query("SELECT COUNT(*) FROM collab_media WHERE collab_id = '{$testDeleteCollabId}'")->fetchColumn() === 0;
+$skillDeleted  = (int)$pdo->query("SELECT COUNT(*) FROM collab_skills WHERE collab_id = '{$testDeleteCollabId}'")->fetchColumn() === 0;
+$circleDeleted = (int)$pdo->query("SELECT COUNT(*) FROM circle WHERE collaboration_id = '{$testDeleteCollabId}'")->fetchColumn() === 0;
+$appDeleted    = (int)$pdo->query("SELECT COUNT(*) FROM collaboration_applications WHERE collab_id = '{$testDeleteCollabId}'")->fetchColumn() === 0;
+$userColDeleted= (int)$pdo->query("SELECT COUNT(*) FROM user_collaboration WHERE collaboration_id = '{$testDeleteCollabId}'")->fetchColumn() === 0;
+
+assertTest("Tabel collaborations: Record Utama Berhasil Dihapus", $collabDeleted);
+assertTest("Tabel collab_media: Media Terhapus Melalui Cascade", $mediaDeleted);
+assertTest("Tabel collab_skills: Skills Terhapus Melalui Cascade", $skillDeleted);
+assertTest("Tabel circle: Circle Terhapus Melalui Cascade", $circleDeleted);
+assertTest("Tabel collaboration_applications: Applications Terhapus Melalui Cascade", $appDeleted);
+assertTest("Tabel user_collaboration: User Collab Member Terhapus Melalui Cascade", $userColDeleted);
+
+// 9. Tes Hapus Ulang Post yang Sudah Dihapus -> HTTP 404
+$cmdDeleteAgain = 'php -r \'define("BASE_PATH", "' . BASE_PATH . '"); require_once BASE_PATH . "/config/env.php"; require_once BASE_PATH . "/controllers/CollabController.php"; $GLOBALS["user"] = ["id" => "' . $userAId . '"]; CollabController::deleteCollab(["id" => "' . $testDeleteCollabId . '"]);\'';
+$resDeleteAgain = json_decode((string)shell_exec($cmdDeleteAgain), true);
+assertTest("DELETE /api/collab/:id Post yang Sudah Dihapus -> HTTP 404 ('Collaboration Post not found!')", 
+    isset($resDeleteAgain['message']) && $resDeleteAgain['message'] === 'Collaboration Post not found!' && $resDeleteAgain['success'] === false
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // REKAPITULASI HASIL PENGUJIAN
