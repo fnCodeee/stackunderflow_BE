@@ -15,6 +15,7 @@ declare(strict_types=1);
 require_once BASE_PATH . '/config/database.php';
 require_once BASE_PATH . '/models/CircleModel.php';
 require_once BASE_PATH . '/models/ProfileModel.php';
+require_once BASE_PATH . '/models/SkillModel.php';
 
 class CollabModel
 {
@@ -124,6 +125,12 @@ class CollabModel
 
                     if (count($foundSkillIds) !== count($uniqueSkillIds)) {
                         throw new InvalidArgumentException('Terdapat skill ID yang tidak valid atau tidak ditemukan');
+                    }
+
+                    // Validasi kepemilikan: skill system boleh semua user, skill private hanya pemilik
+                    $skillValidationError = SkillModel::validateUsageForUser($uniqueSkillIds, $userId);
+                    if ($skillValidationError !== null) {
+                        throw new InvalidArgumentException($skillValidationError);
                     }
 
                     foreach ($uniqueSkillIds as $skillId) {

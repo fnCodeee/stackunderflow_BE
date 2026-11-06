@@ -18,6 +18,7 @@ require_once BASE_PATH . '/controllers/AuthController.php';
 require_once BASE_PATH . '/controllers/ProfileController.php';
 require_once BASE_PATH . '/controllers/PostController.php';
 require_once BASE_PATH . '/controllers/CollabController.php';
+require_once BASE_PATH . '/controllers/SkillController.php';
 
 // ── Health Check: GET / ───────────────────────────────────────────────────────
 $router->get('/', function (array $params): void {
@@ -93,4 +94,14 @@ $router->put('/api/collab/:id', [AuthMiddleware::class, 'handle'], [CollabContro
 
 // Phase 4F: Delete Collaboration (auth required — sesuai Express baseline)
 $router->delete('/api/collab/:id', [AuthMiddleware::class, 'handle'], [CollabController::class, 'deleteCollab']);
+
+// ── SKILLS MODULE ─────────────────────────────────────────────────────────────
+// GET /api/skills: skill system + private skill milik user yang sedang login
+$router->get('/api/skills', [AuthMiddleware::class, 'handle'], [SkillController::class, 'getSkills']);
+
+// POST /api/skills: buat private skill (auth required)
+$router->post('/api/skills', [AuthMiddleware::class, 'handle'], [SkillController::class, 'createSkill']);
+
+// DELETE /api/skills/:id: hapus private skill milik user login (auth required)
+$router->delete('/api/skills/:id', [AuthMiddleware::class, 'handle'], [SkillController::class, 'deleteSkill']);
 

@@ -13,6 +13,7 @@
 declare(strict_types=1);
 
 require_once BASE_PATH . '/models/CollabModel.php';
+require_once BASE_PATH . '/models/SkillModel.php';
 require_once BASE_PATH . '/utils/Response.php';
 
 class CollabController
@@ -103,7 +104,13 @@ class CollabController
             $foundSkillIds = $checkSkillStmt->fetchAll(PDO::FETCH_COLUMN);
 
             if (count($foundSkillIds) !== count($uniqueSkillIds)) {
-                Response::json(null, 400, $placeholders . ' not found', false);
+                Response::json(null, 400, 'not found', false);
+            }
+
+            // 4b. Validasi kepemilikan skill: system boleh semua user, private hanya pemilik
+            $skillValidationError = SkillModel::validateUsageForUser($uniqueSkillIds, $userId);
+            if ($skillValidationError !== null) {
+                Response::json(null, 400, $skillValidationError, false);
             }
 
             // 5. Simpan ke database melalui CollabModel dalam transaksi atomik (collab + media + skills + circle)
@@ -276,6 +283,7 @@ class CollabController
 
             $title          = trim((string)($body['title'] ?? ''));
             $description    = trim((string)($body['description'] ?? ''));
+            $status         = trim((string)($body['status'] ?? ''));
             $requiredMember = $body['required_member'] ?? $body['requiredMember'] ?? null;
             $mediaUrls      = $body['media_urls'] ?? $body['mediaUrls'] ?? null;
             $mediaPublicIds = $body['media_public_ids'] ?? $body['mediaPublicIds'] ?? null;
@@ -311,6 +319,9 @@ class CollabController
             }
             if ($description !== '' && $description !== null) {
                 $updateData['description'] = $description;
+            }
+            if ($status !== '' && $status !== null) {
+                $updateData['status'] = $status;
             }
             if ($requiredMember !== null && $requiredMember !== '') {
                 if (!is_numeric($requiredMember) || intval($requiredMember) < 1) {
@@ -382,6 +393,12 @@ class CollabController
                     Response::json(null, 400, 'Terdapat skill ID yang tidak valid atau tidak ditemukan', false);
                 }
 
+                // Validasi kepemilikan skill: system boleh semua user, private hanya pemilik
+                $skillValidationError = SkillModel::validateUsageForUser($normalizedSkillIds, $userId);
+                if ($skillValidationError !== null) {
+                    Response::json(null, 400, $skillValidationError, false);
+                }
+
                 $pdo->beginTransaction();
                 try {
                     // Hapus skills lama
@@ -429,6 +446,8 @@ class CollabController
             }
 
             // Jalankan UPDATE utama
+            error_log('UPDATE DATA: ' . json_encode($updateData));
+            
             if (!empty($updateData)) {
                 $setClause = [];
                 foreach (array_keys($updateData) as $key) {
@@ -437,6 +456,8 @@ class CollabController
                 $setClauseStr = implode(', ', $setClause);
                 $updateStmt = $pdo->prepare("UPDATE collaborations SET $setClauseStr WHERE id = :id");
                 $updateStmt->execute(array_merge($updateData, [':id' => $collabId]));
+            } else {
+                Response::json(null, 400, 'Tidak ada data yang diperbarui', false);
             }
 
             // Ambil data terbaru
@@ -488,10 +509,10 @@ class CollabController
             }
 
             // Ambil ID owner dari ownerId object atau user_id
-            $ownerId = $collab['ownerId']['id'] ?? $collab['user_id'] ?? null;
+            $ownerId = $collab['owner']['id'] ?? $collab['user_id'] ?? null;
 
             if ((string)$ownerId !== (string)$userId) {
-                Response::json(null, 403, 'Bukan hak lu buat edit postingan ini!', false);
+                Response::json(null, 403, 'Bukan hak lu buat hapus collab ini!', false);
             }
 
             // Hapus kolaborasi dari database (CASCADE akan membersihkan child tables secara atomik)
