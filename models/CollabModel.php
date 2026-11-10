@@ -48,6 +48,16 @@ class CollabModel
         $description = $data['description'];
         $requiredMember = (int) ($data['required_member'] ?? 1);
         $status = $data['status'] ?? 'open';
+        $type = in_array($data['type'] ?? '', ['coursework', 'portfolio', 'product'], true)
+            ? $data['type']
+            : 'coursework';
+        $dueDate = $data['due_date'] ?? null;
+        if ($dueDate !== null && $dueDate !== '' && strtotime((string) $dueDate) === false) {
+            $dueDate = null;
+        }
+        if ($dueDate === '') {
+            $dueDate = null;
+        }
         $mediaUrls = $data['media_urls'] ?? [];
         $mediaPublicIds = $data['media_public_ids'] ?? [];
         $skillsNeeded = $data['skills_needed'] ?? [];
@@ -59,8 +69,8 @@ class CollabModel
         try {
             // 1. Insert ke tabel collaborations
             $collabStmt = $pdo->prepare(
-                "INSERT INTO collaborations (id, user_id, title, description, required_member, status)
-                 VALUES (:id, :user_id, :title, :description, :required_member, :status)"
+                "INSERT INTO collaborations (id, user_id, title, description, type, due_date, required_member, status)
+                 VALUES (:id, :user_id, :title, :description, :type, :due_date, :required_member, :status)"
             );
 
             $collabStmt->execute([
@@ -68,6 +78,8 @@ class CollabModel
                 ':user_id' => $userId,
                 ':title' => $title,
                 ':description' => $description,
+                ':type' => $type,
+                ':due_date' => $dueDate,
                 ':required_member' => $requiredMember,
                 ':status' => $status,
             ]);
@@ -259,8 +271,12 @@ class CollabModel
             c.id,
             c.user_id,
             c.title,
+            c.description,
+            c.type,
+            c.due_date,
             c.required_member,
             c.status,
+            c.created_at,
             u.username,
             pr.photo_profile_url
         FROM collaborations c
@@ -341,6 +357,9 @@ class CollabModel
             $result[] = [
                 'id' => $cid,
                 'title' => $collab['title'],
+                'description' => $collab['description'] ?? '',
+                'type' => $collab['type'] ?? 'coursework',
+                'due_date' => $collab['due_date'],
                 'status' => $collab['status'],
                 'required_member' => $requiredMember,
                 'accepted_member_count' => $acceptedMemberCount,
@@ -356,6 +375,125 @@ class CollabModel
                         $collab['photo_profile_url']
                         ?? ProfileModel::DEFAULT_PHOTO_URL,
                 ],
+                'created_at' => $collab['created_at'] ?? null,
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Mengambil collaboration yang dimiliki user, yang user ikuti sebagai
+     * anggota, atau yang user ajukan (pending) — beserta myStatus untuk
+     * board My Collaborations. Powers GET /api/my-collaborations.
+     *
+     * @param  string $userId UUID user yang sedang login
+     * @return array<int, array<string, mixed>>
+     */
+    public static function getByMemberId(string $userId): array
+    {
+        $pdo = getDB();
+
+        $sql = "
+            SELECT
+                c.id,
+                c.user_id,
+                c.title,
+                c.description,
+                c.type,
+                c.due_date,
+                c.required_member,
+                c.status,
+                c.created_at,
+                CASE
+                    WHEN uc.status IS NOT NULL THEN uc.status
+                    WHEN ca.id IS NOT NULL THEN 'pending'
+                    ELSE 'not-started'
+                END AS my_status,
+                u.username,
+                pr.photo_profile_url
+            FROM collaborations c
+            LEFT JOIN user_collaboration uc
+                ON uc.collaboration_id = c.id AND uc.user_id = ?
+            LEFT JOIN collaboration_applications ca
+                ON ca.collab_id = c.id AND ca.user_id = ? AND ca.status = 'pending'
+            LEFT JOIN users u ON c.user_id = u.id
+            LEFT JOIN profiles pr ON c.user_id = pr.user_id
+            WHERE c.user_id = ? OR uc.user_id = ? OR ca.id IS NOT NULL
+            ORDER BY c.created_at DESC
+        ";
+
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([$userId, $userId, $userId, $userId]);
+        $collabs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if (empty($collabs)) {
+            return [];
+        }
+
+        $collabIds = array_column($collabs, 'id');
+        $placeholders = implode(',', array_fill(0, count($collabIds), '?'));
+
+        $skillsStmt = $pdo->prepare("
+            SELECT
+                cs.collab_id,
+                s.id,
+                s.skill_name,
+                s.scope
+            FROM collab_skills cs
+            JOIN skills s ON cs.skill_id = s.id
+            WHERE cs.collab_id IN ($placeholders)
+            ORDER BY s.skill_name ASC
+        ");
+        $skillsStmt->execute($collabIds);
+        $skillRows = $skillsStmt->fetchAll(PDO::FETCH_ASSOC);
+        $skillsMap = [];
+        foreach ($skillRows as $skill) {
+            $skillsMap[$skill['collab_id']][] = [
+                'id' => $skill['id'],
+                'skill_name' => $skill['skill_name'],
+                'scope' => $skill['scope'],
+            ];
+        }
+
+        $memberStmt = $pdo->prepare("
+            SELECT collaboration_id, COUNT(*) AS accepted_member_count
+            FROM user_collaboration
+            WHERE collaboration_id IN ($placeholders)
+            GROUP BY collaboration_id
+        ");
+        $memberStmt->execute($collabIds);
+        $memberRows = $memberStmt->fetchAll(PDO::FETCH_ASSOC);
+        $memberCountMap = [];
+        foreach ($memberRows as $member) {
+            $memberCountMap[$member['collaboration_id']] = (int) $member['accepted_member_count'];
+        }
+
+        $result = [];
+        foreach ($collabs as $collab) {
+            $cid = $collab['id'];
+            $requiredMember = (int) $collab['required_member'];
+            $acceptedMemberCount = $memberCountMap[$cid] ?? 0;
+            $result[] = [
+                'id' => $cid,
+                'title' => $collab['title'],
+                'description' => $collab['description'] ?? '',
+                'type' => $collab['type'] ?? 'coursework',
+                'due_date' => $collab['due_date'],
+                'status' => $collab['status'],
+                'my_status' => $collab['my_status'],
+                'required_member' => $requiredMember,
+                'accepted_member_count' => $acceptedMemberCount,
+                'available_slots' => max(0, $requiredMember - $acceptedMemberCount),
+                'skills_needed' => $skillsMap[$cid] ?? [],
+                'owner' => [
+                    'id' => $collab['user_id'],
+                    'username' => $collab['username'] ?? '',
+                    'photo_profile_url' =>
+                        $collab['photo_profile_url']
+                        ?? ProfileModel::DEFAULT_PHOTO_URL,
+                ],
+                'created_at' => $collab['created_at'] ?? null,
             ];
         }
 
@@ -379,6 +517,8 @@ class CollabModel
             c.user_id,
             c.title,
             c.description,
+            c.type,
+            c.due_date,
             c.required_member,
             c.status,
             c.created_at,
@@ -462,6 +602,8 @@ class CollabModel
             'id' => $collab['id'],
             'title' => $collab['title'],
             'description' => $collab['description'],
+            'type' => $collab['type'] ?? 'coursework',
+            'due_date' => $collab['due_date'],
             'required_member' => $requiredMember,
             'accepted_member_count' => $acceptedMemberCount,
             'available_slots' => max(

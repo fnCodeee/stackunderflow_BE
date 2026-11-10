@@ -19,6 +19,7 @@ require_once BASE_PATH . '/controllers/ProfileController.php';
 require_once BASE_PATH . '/controllers/PostController.php';
 require_once BASE_PATH . '/controllers/CollabController.php';
 require_once BASE_PATH . '/controllers/SkillController.php';
+require_once BASE_PATH . '/controllers/UserController.php';
 
 // ── Health Check: GET / ───────────────────────────────────────────────────────
 $router->get('/', function (array $params): void {
@@ -84,10 +85,16 @@ $router->delete('/api/posts/:postId/comments/:commentId', [AuthMiddleware::class
 // Phase 4C: Create Collaboration + Auto-create Circle
 $router->post('/api/collab', [AuthMiddleware::class, 'handle'], [CollabController::class, 'createCollab']);
 
-// Phase 4D: Read Collaborations (auth required — sesuai Express baseline)
-$router->get('/api/collab', [AuthMiddleware::class, 'handle'], [CollabController::class, 'showCollab']);
-$router->get('/api/collab/:id', [AuthMiddleware::class, 'handle'], [CollabController::class, 'getCollabDetail']);
+// Phase 4D: Read Collaborations — PUBLIC (OptionalAuth) since 2026-11-10:
+// the frontend pages are server components and cannot send the
+// localStorage token; browsing collabs is public, like the feed.
+$router->get('/api/collab', [OptionalAuthMiddleware::class, 'handle'], [CollabController::class, 'showCollab']);
+$router->get('/api/collab/:id', [OptionalAuthMiddleware::class, 'handle'], [CollabController::class, 'getCollabDetail']);
 $router->get('/api/profiles/:userId/collab', [AuthMiddleware::class, 'handle'], [CollabController::class, 'yourCollabPost']);
+
+// My Collaborations board (added 2026-11-10): the current user's
+// collabs with myStatus.
+$router->get('/api/my-collaborations', [AuthMiddleware::class, 'handle'], [CollabController::class, 'getMyCollaborations']);
 
 // Phase 4E: Update Collaboration (auth required — sesuai Express baseline)
 $router->put('/api/collab/:id', [AuthMiddleware::class, 'handle'], [CollabController::class, 'updateCollab']);
@@ -104,4 +111,9 @@ $router->post('/api/skills', [AuthMiddleware::class, 'handle'], [SkillController
 
 // DELETE /api/skills/:id: hapus private skill milik user login (auth required)
 $router->delete('/api/skills/:id', [AuthMiddleware::class, 'handle'], [SkillController::class, 'deleteSkill']);
+
+// ── USERS MODULE ──────────────────────────────────────────────────────────────
+// GET /api/users/:id: public person detail for the profile page
+// (added 2026-11-10; "me" resolves to the logged-in user).
+$router->get('/api/users/:id', [OptionalAuthMiddleware::class, 'handle'], [UserController::class, 'getUser']);
 

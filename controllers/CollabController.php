@@ -48,6 +48,8 @@ class CollabController
 
             $title          = trim((string)($body['title'] ?? ''));
             $description    = trim((string)($body['description'] ?? ''));
+            $type           = $body['type'] ?? null;
+            $dueDate        = $body['due_date'] ?? $body['dueDate'] ?? null;
             $requiredMember = $body['required_member'] ?? $body['requiredMember'] ?? null;
             $mediaUrls      = $body['media_urls'] ?? $body['mediaUrls'] ?? [];
             $mediaPublicIds = $body['media_public_ids'] ?? $body['mediaPublicIds'] ?? [];
@@ -118,6 +120,8 @@ class CollabController
                 'user_id'          => $userId,
                 'title'            => $title,
                 'description'      => $description,
+                'type'             => $type,
+                'due_date'         => $dueDate,
                 'required_member'  => $requiredMemberInt,
                 'media_urls'       => is_array($mediaUrls) ? array_values($mediaUrls) : [],
                 'media_public_ids' => is_array($mediaPublicIds) ? array_values($mediaPublicIds) : [],
@@ -154,12 +158,7 @@ class CollabController
     public static function showCollab(array $params = []): void
     {
         try {
-            $userId = $GLOBALS['user']['id'] ?? null;
-
-            if (!$userId) {
-                Response::json(null, 401, 'Unauthorized', false);
-            }
-
+            // Public listing: readable without a token (OptionalAuth).
             $collabs = CollabModel::getAll();
             Response::json($collabs, 200, 'Get All Posts Collaboration!', true);
         } catch (Throwable $e) {
@@ -178,12 +177,7 @@ class CollabController
     public static function getCollabDetail(array $params = []): void
     {
         try {
-            $userId = $GLOBALS['user']['id'] ?? null;
-
-            if (!$userId) {
-                Response::json(null, 401, 'Unauthorized', false);
-            }
-
+            // Public detail: readable without a token (OptionalAuth).
             $collabId = $params['id'] ?? '';
             if ($collabId === '') {
                 Response::json(null, 404, 'Collaboration not found', false);
@@ -237,6 +231,31 @@ class CollabController
         } catch (Throwable $e) {
             error_log('[COLLAB ERROR] ' . $e->getMessage());
             Response::json(null, 500, 'Terjadi kesalahan pada server saat mengambil kolaborasi pengguna', false);
+        }
+    }
+
+    /**
+     * Handler untuk GET /api/my-collaborations
+     * Mengambil collaboration yang dimiliki user, yang user ikuti sebagai
+     * anggota, atau yang user ajukan (pending) — beserta myStatus.
+     *
+     * @param  array<string, string> $params Path parameters dari Router
+     * @return void
+     */
+    public static function getMyCollaborations(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $collabs = CollabModel::getByMemberId($userId);
+            Response::json($collabs, 200, 'Your Collaborations!', true);
+        } catch (Throwable $e) {
+            error_log('[COLLAB ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat mengambil kolaborasi saya', false);
         }
     }
 
