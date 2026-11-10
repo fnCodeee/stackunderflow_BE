@@ -51,15 +51,16 @@ class PostController
             $description    = trim((string)($body['description'] ?? ''));
             $portfolioType  = trim((string)($body['portfolio_type'] ?? $body['portfolioType'] ?? 'link'));
             $externalUrlRaw = $body['external_url'] ?? $body['externalUrl'] ?? null;
-            $mediaUrls      = $body['media_urls'] ?? $body['mediaUrls'] ?? null;
+            $mediaUrls      = $body['media_urls'] ?? $body['mediaUrls'] ?? [];
             $mediaPublicIds = $body['media_public_ids'] ?? $body['mediaPublicIds'] ?? [];
 
-            // 2. Validasi field wajib sesuai baseline Express
+            // 2. Validasi field wajib: title + description. media_urls
+            // opsional sejak 2026-11-10 — post teks saja boleh (array
+            // kosong); kalau dikirim harus berupa array.
             if (
                 $title === '' ||
                 $description === '' ||
-                !is_array($mediaUrls) ||
-                count($mediaUrls) === 0
+                !is_array($mediaUrls)
             ) {
                 Response::json(null, 400, 'Please fill all the required fields!', false);
             }
