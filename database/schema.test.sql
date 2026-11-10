@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS public_posts (
     view_count INT NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL DEFAULT NULL,
 
     PRIMARY KEY (id),
     KEY idx_public_posts_user_id (user_id),
@@ -156,6 +157,7 @@ CREATE TABLE IF NOT EXISTS comments (
     content TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL DEFAULT NULL,
 
     PRIMARY KEY (id),
     KEY idx_comments_post_id (post_id),
@@ -185,6 +187,7 @@ CREATE TABLE IF NOT EXISTS collaborations (
     status ENUM('open', 'in-progress', 'completed') NOT NULL DEFAULT 'open',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL DEFAULT NULL,
 
     PRIMARY KEY (id),
     KEY idx_collaborations_user_id (user_id),

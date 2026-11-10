@@ -84,7 +84,7 @@ class CommentModel
             FROM comments c
             LEFT JOIN users u ON c.user_id = u.id
             LEFT JOIN profiles pr ON c.user_id = pr.user_id
-            WHERE c.id = :id
+            WHERE c.id = :id AND c.deleted_at IS NULL
             LIMIT 1
         ";
         $stmt = $pdo->prepare($sql);
@@ -130,7 +130,7 @@ class CommentModel
     public static function findById(string $commentId): ?array
     {
         $pdo = getDB();
-        $stmt = $pdo->prepare("SELECT * FROM comments WHERE id = :id LIMIT 1");
+        $stmt = $pdo->prepare("SELECT * FROM comments WHERE id = :id AND deleted_at IS NULL LIMIT 1");
         $stmt->execute([':id' => $commentId]);
         $row = $stmt->fetch();
         return $row ?: null;
@@ -158,7 +158,7 @@ class CommentModel
             FROM comments c
             LEFT JOIN users u ON c.user_id = u.id
             LEFT JOIN profiles pr ON c.user_id = pr.user_id
-            WHERE c.post_id = :post_id
+            WHERE c.post_id = :post_id AND c.deleted_at IS NULL
             ORDER BY c.created_at DESC
         ";
         $stmt = $pdo->prepare($sql);
@@ -196,7 +196,7 @@ class CommentModel
     }
 
     /**
-     * Menghapus komentar berdasarkan ID.
+     * Soft delete komentar berdasarkan ID (set deleted_at = NOW()).
      *
      * @param  string $commentId UUID komentar
      * @return bool
@@ -204,7 +204,7 @@ class CommentModel
     public static function delete(string $commentId): bool
     {
         $pdo = getDB();
-        $stmt = $pdo->prepare("DELETE FROM comments WHERE id = :id");
+        $stmt = $pdo->prepare("UPDATE comments SET deleted_at = NOW() WHERE id = :id AND deleted_at IS NULL");
         return $stmt->execute([':id' => $commentId]);
     }
 
@@ -217,7 +217,7 @@ class CommentModel
     public static function countByPostId(string $postId): int
     {
         $pdo = getDB();
-        $stmt = $pdo->prepare("SELECT COUNT(*) FROM comments WHERE post_id = :post_id");
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM comments WHERE post_id = :post_id AND deleted_at IS NULL");
         $stmt->execute([':post_id' => $postId]);
         return (int)$stmt->fetchColumn();
     }

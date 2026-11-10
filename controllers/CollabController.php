@@ -318,7 +318,7 @@ class CollabController
 
             // CEK OWNERSHIP SEBELUM UPDATE (mirip Express: findById lalu compare user_id)
             $pdo = getDB();
-            $checkStmt = $pdo->prepare("SELECT user_id, title FROM collaborations WHERE id = :id LIMIT 1");
+            $checkStmt = $pdo->prepare("SELECT user_id, title FROM collaborations WHERE id = :id AND deleted_at IS NULL LIMIT 1");
             $checkStmt->execute([':id' => $collabId]);
             $existing = $checkStmt->fetch();
 

@@ -203,7 +203,7 @@ class CollabModel
         $pdo = getDB();
 
         // 1. Ambil data utama collaboration
-        $stmt = $pdo->prepare("SELECT * FROM collaborations WHERE id = :id LIMIT 1");
+        $stmt = $pdo->prepare("SELECT * FROM collaborations WHERE id = :id AND deleted_at IS NULL LIMIT 1");
         $stmt->execute([':id' => $id]);
         $collab = $stmt->fetch();
 
@@ -284,6 +284,7 @@ class CollabModel
             ON c.user_id = u.id
         LEFT JOIN profiles pr
             ON c.user_id = pr.user_id
+        WHERE c.deleted_at IS NULL
         ORDER BY c.created_at DESC
     ";
 
@@ -419,7 +420,7 @@ class CollabModel
                 ON ca.collab_id = c.id AND ca.user_id = ? AND ca.status = 'pending'
             LEFT JOIN users u ON c.user_id = u.id
             LEFT JOIN profiles pr ON c.user_id = pr.user_id
-            WHERE c.user_id = ? OR uc.user_id = ? OR ca.id IS NOT NULL
+            WHERE c.deleted_at IS NULL AND (c.user_id = ? OR uc.user_id = ? OR ca.id IS NOT NULL)
             ORDER BY c.created_at DESC
         ";
 
@@ -530,7 +531,7 @@ class CollabModel
             ON c.user_id = u.id
         LEFT JOIN profiles pr
             ON c.user_id = pr.user_id
-        WHERE c.id = :id
+        WHERE c.id = :id AND c.deleted_at IS NULL
         LIMIT 1
     ");
 
@@ -666,7 +667,7 @@ class CollabModel
                 c.created_at,
                 c.updated_at
             FROM collaborations c
-            WHERE c.user_id = :user_id
+            WHERE c.user_id = :user_id AND c.deleted_at IS NULL
             ORDER BY c.created_at DESC
         ");
         $collabStmt->execute([':user_id' => $userId]);
@@ -792,30 +793,19 @@ class CollabModel
     /**
      * Menghapus postingan kolaborasi berdasarkan ID.
      * Menggunakan transaction PDO. Foreign key CASCADE pada InnoDB secara otomatis
-     * menghapus relasi pada tabel collab_media, collab_skills, circle, zone,
-     * zone_messages, collaboration_applications, dan user_collaboration.
+     * Soft delete collaboration: set deleted_at = NOW(). Row tetap ada
+     * di database (bisa di-restore / diaudit); relasi (collab_media,
+     * collab_skills, circle, zone, applications, user_collaboration)
+     * TIDAK dihapus.
      *
      * @param  string $id UUID collaboration
      * @return bool True jika berhasil dihapus
-     * @throws Throwable Jika operasi gagal (otomatis rollback)
      */
     public static function delete(string $id): bool
     {
         $pdo = getDB();
-        $pdo->beginTransaction();
-
-        try {
-            $stmt = $pdo->prepare("DELETE FROM collaborations WHERE id = :id");
-            $result = $stmt->execute([':id' => $id]);
-
-            $pdo->commit();
-            return $result;
-        } catch (Throwable $e) {
-            if ($pdo->inTransaction()) {
-                $pdo->rollBack();
-            }
-            throw $e;
-        }
+        $stmt = $pdo->prepare("UPDATE collaborations SET deleted_at = NOW() WHERE id = :id AND deleted_at IS NULL");
+        return $stmt->execute([':id' => $id]);
     }
 
     /**

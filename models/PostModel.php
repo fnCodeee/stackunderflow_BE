@@ -148,7 +148,7 @@ class PostModel
             FROM public_posts p
             LEFT JOIN users u ON p.user_id = u.id
             LEFT JOIN profiles pr ON p.user_id = pr.user_id
-            WHERE p.id = :id
+            WHERE p.id = :id AND p.deleted_at IS NULL
             LIMIT 1
         ";
         $stmt = $pdo->prepare($sql);
@@ -180,7 +180,7 @@ class PostModel
         $likeCount = (int)($likeStmt->fetchColumn() ?? 0);
 
         // 5. Ambil comment_count
-        $commentStmt = $pdo->prepare("SELECT COUNT(*) as count FROM comments WHERE post_id = :post_id");
+        $commentStmt = $pdo->prepare("SELECT COUNT(*) as count FROM comments WHERE post_id = :post_id AND deleted_at IS NULL");
         $commentStmt->execute([':post_id' => $id]);
         $commentCount = (int)($commentStmt->fetchColumn() ?? 0);
 
@@ -206,7 +206,7 @@ class PostModel
             FROM comments c
             LEFT JOIN users u ON c.user_id = u.id
             LEFT JOIN profiles pr ON c.user_id = pr.user_id
-            WHERE c.post_id = :post_id
+            WHERE c.post_id = :post_id AND c.deleted_at IS NULL
             ORDER BY c.created_at DESC
         ";
         $commentsStmt = $pdo->prepare($commentsSql);
@@ -266,7 +266,7 @@ class PostModel
         $pdo = getDB();
 
         // 1. Ambil data utama post
-        $stmt = $pdo->prepare("SELECT * FROM public_posts WHERE id = :id LIMIT 1");
+        $stmt = $pdo->prepare("SELECT * FROM public_posts WHERE id = :id AND deleted_at IS NULL LIMIT 1");
         $stmt->execute([':id' => $id]);
         $post = $stmt->fetch();
 
@@ -296,7 +296,7 @@ class PostModel
     }
 
     /**
-     * Menghapus post berdasarkan ID (berguna untuk testing/cleanup).
+     * Soft delete post berdasarkan ID (berguna untuk testing/cleanup).
      *
      * @param  string $id
      * @return bool
@@ -304,13 +304,14 @@ class PostModel
     public static function deleteById(string $id): bool
     {
         $pdo = getDB();
-        $stmt = $pdo->prepare("DELETE FROM public_posts WHERE id = :id");
+        $stmt = $pdo->prepare("UPDATE public_posts SET deleted_at = NOW() WHERE id = :id AND deleted_at IS NULL");
         return $stmt->execute([':id' => $id]);
     }
 
     /**
-     * Menghapus post beserta seluruh data terkait (like_posts, comments, media_posts)
-     * dalam 1 database transaction sesuai dengan behavior Express baseline.
+     * Soft delete post: set deleted_at = NOW(). Row tetap ada di database
+     * (bisa di-restore / diaudit); likes, comments, dan media terkait
+     * TIDAK dihapus.
      *
      * @param  string $id UUID post
      * @return bool True jika berhasil dihapus
@@ -318,34 +319,8 @@ class PostModel
     public static function delete(string $id): bool
     {
         $pdo = getDB();
-
-        $pdo->beginTransaction();
-
-        try {
-            // 1. Hapus likes terkait
-            $likeStmt = $pdo->prepare("DELETE FROM like_posts WHERE post_id = :post_id");
-            $likeStmt->execute([':post_id' => $id]);
-
-            // 2. Hapus comments terkait
-            $commentStmt = $pdo->prepare("DELETE FROM comments WHERE post_id = :post_id");
-            $commentStmt->execute([':post_id' => $id]);
-
-            // 3. Hapus media_posts terkait
-            $mediaStmt = $pdo->prepare("DELETE FROM media_posts WHERE post_id = :post_id");
-            $mediaStmt->execute([':post_id' => $id]);
-
-            // 4. Hapus record utama di public_posts
-            $postStmt = $pdo->prepare("DELETE FROM public_posts WHERE id = :id");
-            $postStmt->execute([':id' => $id]);
-
-            $pdo->commit();
-            return true;
-        } catch (Throwable $e) {
-            if ($pdo->inTransaction()) {
-                $pdo->rollBack();
-            }
-            throw $e;
-        }
+        $stmt = $pdo->prepare("UPDATE public_posts SET deleted_at = NOW() WHERE id = :id AND deleted_at IS NULL");
+        return $stmt->execute([':id' => $id]);
     }
 
     /**
@@ -376,6 +351,7 @@ class PostModel
             FROM public_posts p
             LEFT JOIN users u ON p.user_id = u.id
             LEFT JOIN profiles pr ON p.user_id = pr.user_id
+            WHERE p.deleted_at IS NULL
             ORDER BY p.created_at DESC
         ";
 
@@ -425,7 +401,7 @@ class PostModel
         $commentStmt = $pdo->prepare("
             SELECT post_id, COUNT(*) as count 
             FROM comments 
-            WHERE post_id IN ($placeholders) 
+            WHERE post_id IN ($placeholders) AND deleted_at IS NULL 
             GROUP BY post_id
         ");
         $commentStmt->execute($postIds);
@@ -493,7 +469,7 @@ class PostModel
              $pdo = getDB();
 
              // 1. Cek post exists
-             $checkStmt = $pdo->prepare("SELECT user_id FROM public_posts WHERE id = :id LIMIT 1");
+             $checkStmt = $pdo->prepare("SELECT user_id FROM public_posts WHERE id = :id AND deleted_at IS NULL LIMIT 1");
              $checkStmt->execute([':id' => $id]);
              $existing = $checkStmt->fetch();
 
@@ -519,7 +495,7 @@ class PostModel
                          external_url = :external_url,
                          portfolio_type = :portfolio_type,
                          updated_at = CURRENT_TIMESTAMP
-                     WHERE id = :id
+                     WHERE id = :id AND deleted_at IS NULL
                  ");
 
                  $stmt->execute([

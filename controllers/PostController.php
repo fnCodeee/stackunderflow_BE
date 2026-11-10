@@ -210,7 +210,7 @@ class PostController
 
             // 1. Cek ownership dulu (mirip Express: findById lalu compare userId)
             $pdo = getDB();
-            $checkStmt = $pdo->prepare("SELECT user_id FROM public_posts WHERE id = :id LIMIT 1");
+            $checkStmt = $pdo->prepare("SELECT user_id FROM public_posts WHERE id = :id AND deleted_at IS NULL LIMIT 1");
             $checkStmt->execute([':id' => $postId]);
             $existing = $checkStmt->fetch();
 
