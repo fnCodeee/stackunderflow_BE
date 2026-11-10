@@ -123,13 +123,12 @@ class PostModel
     {
         $pdo = getDB();
 
-        // 1. Increment view_count dan ambil data utama post dengan user + profile
-        $stmt = $pdo->prepare("
-            UPDATE public_posts 
-            SET view_count = view_count + 1 
-            WHERE id = :id
-        ");
-        $stmt->execute([':id' => $id]);
+        // 1. Catat view (satu akun dihitung sekali per post) lalu ambil
+        // data utama post dengan user + profile. Tamu (tanpa user id)
+        // tidak dihitung.
+        if ($currentUserId !== null && $currentUserId !== '') {
+            self::recordView($id, $currentUserId);
+        }
 
         // 2. Ambil post yang sudah diupdate beserta user dan profile
         $sql = "
@@ -256,28 +255,45 @@ class PostModel
     }
 
     /**
-     * Menambah view_count sebanyak 1 untuk sebuah post.
-     * Dipakai endpoint POST /api/posts/:postId/view — dipanggil sekali
-     * setiap kali halaman detail post dibuka (client-side).
+     * Mencatat satu view untuk sebuah post — satu akun dihitung maksimal
+     * sekali per post. Baris (user_id, post_id) di post_views bersifat unik
+     * (UNIQUE KEY uq_user_post_view); kalau sudah ada, view_count tidak
+     * ditambah lagi. Dipakai endpoint POST /api/posts/:postId/view.
      *
      * @param  string $postId UUID post
+     * @param  string $userId UUID user yang melihat
      * @return int|null view_count terbaru, atau null jika post tidak ditemukan / sudah dihapus
      */
-    public static function incrementViews(string $postId): ?int
+    public static function recordView(string $postId, string $userId): ?int
     {
         $pdo = getDB();
 
-        $stmt = $pdo->prepare("
-            UPDATE public_posts
-            SET view_count = view_count + 1
-            WHERE id = :id AND deleted_at IS NULL
-        ");
+        // 0. Post harus ada dan belum dihapus.
+        $stmt = $pdo->prepare("SELECT 1 FROM public_posts WHERE id = :id AND deleted_at IS NULL");
         $stmt->execute([':id' => $postId]);
-
-        if ($stmt->rowCount() === 0) {
+        if ($stmt->fetchColumn() === false) {
             return null;
         }
 
+        // 1. Catat siapa yang melihat (unik per user+post — duplikat diabaikan).
+        $stmt = $pdo->prepare("
+            INSERT IGNORE INTO post_views (post_id, user_id)
+            VALUES (:post_id, :user_id)
+        ");
+        $stmt->execute([':post_id' => $postId, ':user_id' => $userId]);
+        $isNewView = $stmt->rowCount() === 1;
+
+        // 2. Tambah view_count hanya kalau ini view pertama akun tersebut.
+        if ($isNewView) {
+            $stmt = $pdo->prepare("
+                UPDATE public_posts
+                SET view_count = view_count + 1
+                WHERE id = :id
+            ");
+            $stmt->execute([':id' => $postId]);
+        }
+
+        // 3. Kembalikan view_count terbaru.
         $stmt = $pdo->prepare("SELECT view_count FROM public_posts WHERE id = :id");
         $stmt->execute([':id' => $postId]);
         $count = $stmt->fetchColumn();

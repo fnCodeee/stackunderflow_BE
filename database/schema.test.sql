@@ -151,6 +151,25 @@ CREATE TABLE IF NOT EXISTS like_posts (
         ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS post_views (
+    id VARCHAR(36) NOT NULL DEFAULT (UUID()),
+    post_id VARCHAR(36) NOT NULL,
+    user_id VARCHAR(36) NOT NULL,
+    viewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_user_post_view (user_id, post_id),
+    KEY idx_post_views_post_id (post_id),
+    KEY idx_post_views_user_id (user_id),
+
+    CONSTRAINT fk_views_post
+        FOREIGN KEY (post_id) REFERENCES public_posts (id)
+        ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT fk_views_user
+        FOREIGN KEY (user_id) REFERENCES users (id)
+        ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS comments (
     id VARCHAR(36) NOT NULL DEFAULT (UUID()),
     user_id VARCHAR(36) NOT NULL,

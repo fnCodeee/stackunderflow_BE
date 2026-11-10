@@ -174,7 +174,7 @@ class PostController
                 Response::json(null, 400, 'Post ID diperlukan', false);
             }
 
-            $viewCount = PostModel::incrementViews($postId);
+            $viewCount = PostModel::recordView($postId, $userId);
 
             if ($viewCount === null) {
                 Response::json(null, 404, 'Post Not found!', false);
