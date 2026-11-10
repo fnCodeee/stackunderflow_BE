@@ -20,6 +20,7 @@ require_once BASE_PATH . '/controllers/PostController.php';
 require_once BASE_PATH . '/controllers/CollabController.php';
 require_once BASE_PATH . '/controllers/SkillController.php';
 require_once BASE_PATH . '/controllers/UserController.php';
+require_once BASE_PATH . '/controllers/UploadController.php';
 
 // ── Health Check: GET / ───────────────────────────────────────────────────────
 $router->get('/', function (array $params): void {
@@ -86,6 +87,10 @@ $router->post('/api/posts/:postId/comments', [AuthMiddleware::class, 'handle'], 
 $router->get('/api/posts/:postId/comments', [AuthMiddleware::class, 'handle'], [PostController::class, 'getComments']);
 $router->delete('/api/delete/comments/:commentId', [AuthMiddleware::class, 'handle'], [PostController::class, 'deleteComment']);
 $router->delete('/api/posts/:postId/comments/:commentId', [AuthMiddleware::class, 'handle'], [PostController::class, 'deleteComment']);
+
+// ── UPLOAD ──────────────────────────────────────────────────────────────────
+// Upload gambar ke Cloudinary (auth required) — dipakai PostModal.
+$router->post('/api/upload', [AuthMiddleware::class, 'handle'], [UploadController::class, 'uploadImage']);
 
 // ── COLLABORATIONS MODULE ─────────────────────────────────────────────────────
 // Phase 4C: Create Collaboration + Auto-create Circle
