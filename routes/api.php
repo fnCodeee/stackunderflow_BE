@@ -48,6 +48,9 @@ $router->post('/api/auth/register', [AuthController::class, 'register']);
 // Phase 2C: Login
 $router->post('/api/auth/login', [AuthController::class, 'login']);
 
+// Google sign-in (ID token dari Google Identity Services)
+$router->post('/api/auth/google', [AuthController::class, 'google']);
+
 // ── PROFILES MODULE ───────────────────────────────────────────────────────────
 // Phase 2D-1: Get My Profile
 $router->get('/api/profiles/me', [AuthMiddleware::class, 'handle'], [AuthController::class, 'me']);

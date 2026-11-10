@@ -48,6 +48,34 @@ class UserModel
      * @param  string $id UUID user
      * @return array<string, mixed>|null Associative array user atau null jika tidak ditemukan
      */
+    /**
+     * Mencari user berdasarkan Google ID (sub dari Google ID token).
+     *
+     * @param  string $googleId Google `sub` claim
+     * @return array<string, mixed>|null
+     */
+    public static function findByGoogleId(string $googleId): ?array
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare("SELECT * FROM users WHERE google_id = :google_id LIMIT 1");
+        $stmt->execute([':google_id' => $googleId]);
+        $user = $stmt->fetch();
+
+        return $user ?: null;
+    }
+
+    /**
+     * Menautkan Google ID ke akun yang sudah ada (dipakai saat user yang
+     * daftar pakai username/password login pertama kali via Google
+     * dengan email yang sama).
+     */
+    public static function linkGoogleId(string $userId, string $googleId): bool
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare("UPDATE users SET google_id = :google_id WHERE id = :id AND google_id IS NULL");
+        return $stmt->execute([':google_id' => $googleId, ':id' => $userId]);
+    }
+
     public static function findById(string $id): ?array
     {
         $pdo = getDB();
@@ -61,7 +89,7 @@ class UserModel
     /**
      * Membuat record user baru di database.
      *
-     * @param  array{username: string, password: string, id?: string, is_active?: bool|int} $data
+     * @param  array{username: string, password: string, email: string, id?: string, is_active?: bool|int, google_id?: string|null} $data
      * @return array<string, mixed> Record user yang baru dibuat
      */
     public static function create(array $data): array
@@ -73,10 +101,11 @@ class UserModel
         $password = $data['password'];
         $email = $data['email'];
         $isActive = isset($data['is_active']) ? (int)(bool)$data['is_active'] : 1;
+        $googleId = $data['google_id'] ?? null;
 
         $stmt = $pdo->prepare(
-            "INSERT INTO users (id, username, email, password, is_active) 
-             VALUES (:id, :username, :email, :password, :is_active)"
+            "INSERT INTO users (id, username, email, password, is_active, google_id) 
+             VALUES (:id, :username, :email, :password, :is_active, :google_id)"
         );
 
         $stmt->execute([
@@ -85,6 +114,7 @@ class UserModel
             ':email'     => $email,
             ':password'  => $password,
             ':is_active' => $isActive,
+            ':google_id' => $googleId,
         ]);
 
         $created = self::findById($id);

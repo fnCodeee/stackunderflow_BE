@@ -118,6 +118,154 @@ class AuthController
     }
 
     /**
+     * Handler untuk POST /api/auth/google
+     * Login / daftar via Google ID token (Google Identity Services).
+     * Alur: frontend kirim `id_token` dari GIS -> backend verifikasi ke
+     * Google tokeninfo (cek aud == GOOGLE_CLIENT_ID, iss Google, belum
+     * expired, email terverifikasi) -> cari user by google_id, lalu by
+     * email (tautkan google_id), lalu buat akun baru -> balas JWT yang
+     * sama seperti login biasa. Akun Google baru dapat password acak
+     * (bcrypt) yang tidak diketahui siapa pun, jadi hanya bisa login
+     * via Google.
+     *
+     * @param  array<string, string> $params Path parameters dari Router
+     * @return void
+     */
+    public static function google(array $params = []): void
+    {
+        try {
+            $body = $GLOBALS['body'] ?? [];
+            if (empty($body)) {
+                $raw = file_get_contents('php://input');
+                if (!empty($raw)) {
+                    $decoded = json_decode($raw, true);
+                    if (is_array($decoded)) {
+                        $body = $decoded;
+                    }
+                }
+            }
+
+            $idToken = trim((string)($body['id_token'] ?? ''));
+            if ($idToken === '') {
+                Response::json(null, 400, 'Google ID token wajib diisi!', false);
+            }
+
+            $clientId = trim((string)(getenv('GOOGLE_CLIENT_ID') ?: ''));
+            if ($clientId === '') {
+                Response::json(null, 500, 'Google sign-in belum dikonfigurasi di server!', false);
+            }
+
+            // 1. Verifikasi ID token ke Google (tokeninfo).
+            $ch = curl_init('https://oauth2.googleapis.com/tokeninfo?id_token=' . urlencode($idToken));
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT => 8,
+                CURLOPT_FAILONERROR => false,
+            ]);
+            $rawInfo = curl_exec($ch);
+            $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+            if ($rawInfo === false || $httpCode !== 200) {
+                Response::json(null, 401, 'Google ID token tidak valid!', false);
+            }
+            $info = json_decode((string)$rawInfo, true);
+            if (!is_array($info)) {
+                Response::json(null, 401, 'Google ID token tidak valid!', false);
+            }
+
+            // 2. Cek claim: audience harus client ID kita, issuer Google,
+            //    belum expired, email terverifikasi.
+            $aud = (string)($info['aud'] ?? '');
+            $iss = (string)($info['iss'] ?? '');
+            $exp = (int)($info['exp'] ?? 0);
+            $emailVerified = (string)($info['email_verified'] ?? '') === 'true';
+            $googleId = (string)($info['sub'] ?? '');
+            $email = trim((string)($info['email'] ?? ''));
+            if ($aud !== $clientId
+                || ($iss !== 'accounts.google.com' && $iss !== 'https://accounts.google.com')
+                || $exp <= time()
+                || !$emailVerified
+                || $googleId === ''
+                || $email === ''
+            ) {
+                Response::json(null, 401, 'Google ID token tidak valid!', false);
+            }
+
+            $name = trim((string)($info['name'] ?? ''));
+            $picture = trim((string)($info['picture'] ?? ''));
+
+            // 3. Cari user: by google_id dulu, lalu by email (tautkan).
+            $user = UserModel::findByGoogleId($googleId);
+            if ($user === null) {
+                $user = UserModel::findByEmail($email);
+                if ($user !== null) {
+                    UserModel::linkGoogleId((string)$user['id'], $googleId);
+                    $user = UserModel::findById((string)$user['id']);
+                }
+            }
+
+            // 4. Belum ada akun: buat user + profile default (mirip register).
+            if ($user === null) {
+                // Username dari prefix email, dibuat unik kalau bentrok.
+                $base = strtolower((string)preg_replace('/[^a-z0-9._-]/i', '', (string)(explode('@', $email)[0] ?? 'user')));
+                if ($base === '') {
+                    $base = 'user';
+                }
+                $username = $base;
+                $suffix = 1;
+                while (UserModel::findByUsername($username) !== null) {
+                    $suffix++;
+                    $username = $base . $suffix;
+                }
+
+                $randomPassword = password_hash(random_bytes(32), PASSWORD_BCRYPT);
+                $pdo = getDB();
+                $pdo->beginTransaction();
+                try {
+                    $user = UserModel::create([
+                        'username'  => $username,
+                        'email'     => $email,
+                        'password'  => $randomPassword,
+                        'google_id' => $googleId,
+                    ]);
+                    ProfileModel::create([
+                        'user_id'                 => $user['id'],
+                        'full_name'               => $name,
+                        'bio'                     => '',
+                        'photo_profile_url'       => $picture !== '' ? $picture : ProfileModel::DEFAULT_PHOTO_URL,
+                        'photo_profile_public_id' => '',
+                    ]);
+                    $pdo->commit();
+                } catch (Throwable $dbError) {
+                    if ($pdo->inTransaction()) {
+                        $pdo->rollBack();
+                    }
+                    throw $dbError;
+                }
+            }
+
+            // 5. Akun nonaktif tidak boleh login.
+            if (isset($user['is_active']) && !(bool)$user['is_active']) {
+                Response::json(null, 403, 'Akun ini tidak aktif!', false);
+            }
+
+            // 6. Balas JWT yang sama seperti login biasa.
+            $token = JWT::encode([
+                'id' => $user['id'],
+            ]);
+            $responseData = [
+                'id'       => $user['id'],
+                'username' => $user['username'],
+                'token'    => $token,
+                'email'    => $user['email'] ?? $email,
+            ];
+            Response::json($responseData, 200, 'Yeayy.. Login Google Berhasil!', true);
+        } catch (Throwable $e) {
+            Response::json(null, 500, 'Internal Server error: ' . $e->getMessage(), false);
+        }
+    }
+
+    /**
      * Handler untuk POST /api/auth/login
      *
      * @param  array<string, string> $params Path parameters dari Router

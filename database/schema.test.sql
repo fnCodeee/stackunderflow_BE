@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS users (
         username VARCHAR(100) NOT NULL,
         password VARCHAR(150) NOT NULL,
         email VARCHAR(100) NOT NULL UNIQUE,
+        google_id VARCHAR(255) NULL UNIQUE,
         is_active BOOLEAN NOT NULL DEFAULT TRUE,
         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
