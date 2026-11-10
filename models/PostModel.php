@@ -256,6 +256,36 @@ class PostModel
     }
 
     /**
+     * Menambah view_count sebanyak 1 untuk sebuah post.
+     * Dipakai endpoint POST /api/posts/:postId/view — dipanggil sekali
+     * setiap kali halaman detail post dibuka (client-side).
+     *
+     * @param  string $postId UUID post
+     * @return int|null view_count terbaru, atau null jika post tidak ditemukan / sudah dihapus
+     */
+    public static function incrementViews(string $postId): ?int
+    {
+        $pdo = getDB();
+
+        $stmt = $pdo->prepare("
+            UPDATE public_posts
+            SET view_count = view_count + 1
+            WHERE id = :id AND deleted_at IS NULL
+        ");
+        $stmt->execute([':id' => $postId]);
+
+        if ($stmt->rowCount() === 0) {
+            return null;
+        }
+
+        $stmt = $pdo->prepare("SELECT view_count FROM public_posts WHERE id = :id");
+        $stmt->execute([':id' => $postId]);
+        $count = $stmt->fetchColumn();
+
+        return $count === false ? null : (int)$count;
+    }
+
+    /**
      * Mencari post berdasarkan ID beserta relasi media_posts.
      *
      * @param  string $id UUID post

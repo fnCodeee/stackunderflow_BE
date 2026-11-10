@@ -68,6 +68,9 @@ $router->get('/api/posts', [OptionalAuthMiddleware::class, 'handle'], [PostContr
 // Phase 3D-1: Get Post Detail (auth required — sesuai Express baseline)
 $router->get('/api/posts/:postId', [AuthMiddleware::class, 'handle'], [PostController::class, 'getPostDetail']);
 
+// Phase 3D-1b: Record View (auth required — dipanggil saat halaman detail post dibuka)
+$router->post('/api/posts/:postId/view', [AuthMiddleware::class, 'handle'], [PostController::class, 'recordView']);
+
 // Phase 3D-2: Update Post (auth required — sesuai Express baseline)
 $router->put('/api/posts/:postId', [AuthMiddleware::class, 'handle'], [PostController::class, 'updatePost']);
 

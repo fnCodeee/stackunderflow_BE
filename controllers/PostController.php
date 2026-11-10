@@ -152,6 +152,41 @@ class PostController
     }
 
     /**
+     * Handler untuk POST /api/posts/:postId/view (Record View)
+     * Menambah view_count sebanyak 1. Dipanggil client-side sekali setiap
+     * kali halaman detail post dibuka. Memerlukan AuthMiddleware (login wajib).
+     *
+     * @param  array<string, string> $params Path parameters dari Router (postId)
+     * @return void
+     */
+    public static function recordView(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $postId = $params['postId'] ?? '';
+
+            if ($postId === '') {
+                Response::json(null, 400, 'Post ID diperlukan', false);
+            }
+
+            $viewCount = PostModel::incrementViews($postId);
+
+            if ($viewCount === null) {
+                Response::json(null, 404, 'Post Not found!', false);
+            }
+
+            Response::json(['view_count' => $viewCount], 200, 'View recorded', true);
+        } catch (Throwable $e) {
+            Response::json(null, 500, $e->getMessage(), false);
+        }
+    }
+
+    /**
      * Handler untuk PUT /api/posts/:postId (Update Post)
      * Mengupdate postingan milik user sendiri.
      * Memerlukan AuthMiddleware (login wajib) — sesuai Express baseline.
