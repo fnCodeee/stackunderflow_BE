@@ -21,6 +21,7 @@ require_once BASE_PATH . '/controllers/CollabController.php';
 require_once BASE_PATH . '/controllers/SkillController.php';
 require_once BASE_PATH . '/controllers/UserController.php';
 require_once BASE_PATH . '/controllers/UploadController.php';
+require_once BASE_PATH . '/controllers/NotificationController.php';
 
 // ── Health Check: GET / ───────────────────────────────────────────────────────
 $router->get('/', function (array $params): void {
@@ -87,6 +88,16 @@ $router->post('/api/posts/:postId/comments', [AuthMiddleware::class, 'handle'], 
 $router->get('/api/posts/:postId/comments', [AuthMiddleware::class, 'handle'], [PostController::class, 'getComments']);
 $router->delete('/api/delete/comments/:commentId', [AuthMiddleware::class, 'handle'], [PostController::class, 'deleteComment']);
 $router->delete('/api/posts/:postId/comments/:commentId', [AuthMiddleware::class, 'handle'], [PostController::class, 'deleteComment']);
+
+// ── NOTIFICATIONS MODULE ──────────────────────────────────────────────────────
+// GET /api/notifications: daftar notifikasi milik user login (auth required)
+$router->get('/api/notifications', [AuthMiddleware::class, 'handle'], [NotificationController::class, 'listNotifications']);
+
+// PUT /api/notifications/:id/read: tandai satu notifikasi dibaca (auth required)
+$router->put('/api/notifications/:id/read', [AuthMiddleware::class, 'handle'], [NotificationController::class, 'markRead']);
+
+// POST /api/notifications/read-all: tandai semua notifikasi dibaca (auth required)
+$router->post('/api/notifications/read-all', [AuthMiddleware::class, 'handle'], [NotificationController::class, 'markAllRead']);
 
 // ── UPLOAD ──────────────────────────────────────────────────────────────────
 // Upload gambar ke Cloudinary (auth required) — dipakai PostModal.

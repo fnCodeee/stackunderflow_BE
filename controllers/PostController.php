@@ -15,6 +15,7 @@ declare(strict_types=1);
 require_once BASE_PATH . '/models/PostModel.php';
 require_once BASE_PATH . '/models/LikeModel.php';
 require_once BASE_PATH . '/models/CommentModel.php';
+require_once BASE_PATH . '/models/NotificationModel.php';
 require_once BASE_PATH . '/utils/Response.php';
 
 class PostController
@@ -363,6 +364,13 @@ class PostController
 
             LikeModel::createLike($postId, $userId);
 
+            // Notifikasi untuk pemilik post — kegagalan di sini tidak
+            // boleh menggagalkan like-nya sendiri.
+            try {
+                NotificationModel::createLikeNotification($postId, $post['user_id'], $userId);
+            } catch (Throwable) {
+            }
+
             Response::json(null, 201, 'Post berhasil di-like', true);
         } catch (Throwable $e) {
             Response::json(null, 500, $e->getMessage(), false);
@@ -397,6 +405,12 @@ class PostController
             }
 
             LikeModel::deleteLike($postId, $userId);
+
+            // Like dibatalkan -> notifikasinya ikut hilang.
+            try {
+                NotificationModel::deleteLikeNotification($postId, $userId);
+            } catch (Throwable) {
+            }
 
             Response::json(null, 200, 'Like berhasil dihapus', true);
         } catch (Throwable $e) {
@@ -448,6 +462,13 @@ class PostController
             }
 
             $commentData = CommentModel::create($postId, $userId, $content);
+
+            // Notifikasi untuk pemilik post — kegagalan di sini tidak
+            // boleh menggagalkan komennya sendiri.
+            try {
+                NotificationModel::createCommentNotification($postId, $commentData['id'], $post['user_id'], $userId, $content);
+            } catch (Throwable) {
+            }
 
             Response::json($commentData, 200, 'Success create comment!', true);
         } catch (Throwable $e) {
@@ -522,6 +543,12 @@ class PostController
             }
 
             CommentModel::delete($commentId);
+
+            // Komen dihapus -> notifikasinya ikut hilang.
+            try {
+                NotificationModel::deleteCommentNotification($commentId);
+            } catch (Throwable) {
+            }
 
             Response::json($comment, 200, 'Comment berhasil dihapus!', true);
         } catch (Throwable $e) {
