@@ -91,9 +91,29 @@ class UploadController
             }
 
             // 4. Konfigurasi Cloudinary dari .env.
-            $cloudName = trim((string)(getenv('CLOUDINARY_CLOUD_NAME') ?: ''));
-            $apiKey = trim((string)(getenv('CLOUDINARY_API_KEY') ?: ''));
-            $apiSecret = trim((string)(getenv('CLOUDINARY_API_SECRET') ?: ''));
+            // Utama: CLOUDINARY_URL (cloudinary://<key>:<secret>@<cloud>).
+            // Fallback: tiga var terpisah.
+            $cloudName = '';
+            $apiKey = '';
+            $apiSecret = '';
+            $cloudinaryUrl = trim((string)(getenv('CLOUDINARY_URL') ?: ''));
+            if ($cloudinaryUrl !== '') {
+                $parts = parse_url($cloudinaryUrl);
+                if (
+                    is_array($parts)
+                    && isset($parts['host'], $parts['user'], $parts['pass'])
+                    && $parts['host'] !== '' && $parts['user'] !== '' && $parts['pass'] !== ''
+                ) {
+                    $cloudName = $parts['host'];
+                    $apiKey = urldecode($parts['user']);
+                    $apiSecret = urldecode($parts['pass']);
+                }
+            }
+            if ($cloudName === '' || $apiKey === '' || $apiSecret === '') {
+                $cloudName = trim((string)(getenv('CLOUDINARY_CLOUD_NAME') ?: ''));
+                $apiKey = trim((string)(getenv('CLOUDINARY_API_KEY') ?: ''));
+                $apiSecret = trim((string)(getenv('CLOUDINARY_API_SECRET') ?: ''));
+            }
 
             if ($cloudName === '' || $apiKey === '' || $apiSecret === '') {
                 Response::json(null, 500, 'Upload gambar belum dikonfigurasi.', false);
