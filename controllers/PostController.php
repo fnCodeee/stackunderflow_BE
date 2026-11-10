@@ -106,7 +106,7 @@ class PostController
             $posts = PostModel::getAll($userId);
 
             if (empty($posts)) {
-                Response::json([], 404, 'Belum ada postingan saat ini!', false);
+                Response::json([], 200, 'Belum ada postingan saat ini!', true);
             }
 
             Response::json($posts, 200, 'Berhasil mendapatkan semua Postingan!', true);
