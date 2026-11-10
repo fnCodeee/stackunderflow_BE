@@ -178,9 +178,11 @@ CREATE TABLE IF NOT EXISTS collaborations (
     user_id VARCHAR(36) NOT NULL,
     title VARCHAR(255) NOT NULL,
     description TEXT NOT NULL,
+    `type` ENUM('coursework', 'portfolio', 'product') NOT NULL DEFAULT 'coursework',
     required_member INT NOT NULL DEFAULT 1,
+    due_date DATE NULL,
     communication_url VARCHAR(255) NULL,
-    status ENUM('open', 'closed') NOT NULL DEFAULT 'open',
+    status ENUM('open', 'in-progress', 'completed') NOT NULL DEFAULT 'open',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
@@ -260,6 +262,7 @@ CREATE TABLE IF NOT EXISTS user_collaboration (
     id VARCHAR(36) NOT NULL DEFAULT (UUID()),
     user_id VARCHAR(36) NOT NULL,
     collaboration_id VARCHAR(36) NOT NULL,
+    status ENUM('not-started', 'pending', 'complete', 'revise') NOT NULL DEFAULT 'not-started',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (id),
@@ -310,7 +313,7 @@ CREATE TABLE IF NOT EXISTS zone_messages (
     id VARCHAR(36) NOT NULL DEFAULT (UUID()),
     zone_id VARCHAR(36) NOT NULL,
     user_id VARCHAR(36) NOT NULL,
-    message VARCHAR(150) NOT NULL,
+    message TEXT NOT NULL,
     timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (id),
@@ -323,5 +326,84 @@ CREATE TABLE IF NOT EXISTS zone_messages (
         ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT fk_zone_messages_user
         FOREIGN KEY (user_id) REFERENCES users(id)
+        ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =========================================================
+-- 5. NOTIFICATIONS & DIRECT MESSAGES MODULE
+-- (added 2026-11-10 — the frontend needs these; the original
+-- schema had neither a notifications table nor a DM table)
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id VARCHAR(36) NOT NULL DEFAULT (UUID()),
+    user_id VARCHAR(36) NOT NULL,
+    actor_id VARCHAR(36) NULL,
+    `type` VARCHAR(50) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    body TEXT NULL,
+    target_type VARCHAR(50) NULL,
+    target_id VARCHAR(36) NULL,
+    is_read BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    KEY idx_notifications_user_id (user_id),
+    KEY idx_notifications_is_read (is_read),
+    KEY idx_notifications_created_at (created_at),
+
+    CONSTRAINT fk_notifications_user
+        FOREIGN KEY (user_id) REFERENCES users(id)
+        ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT fk_notifications_actor
+        FOREIGN KEY (actor_id) REFERENCES users(id)
+        ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS dm_conversations (
+    id VARCHAR(36) NOT NULL DEFAULT (UUID()),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS dm_participants (
+    id VARCHAR(36) NOT NULL DEFAULT (UUID()),
+    conversation_id VARCHAR(36) NOT NULL,
+    user_id VARCHAR(36) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_dm_participant (conversation_id, user_id),
+    KEY idx_dm_participants_conversation_id (conversation_id),
+    KEY idx_dm_participants_user_id (user_id),
+
+    CONSTRAINT fk_dm_participants_conversation
+        FOREIGN KEY (conversation_id) REFERENCES dm_conversations(id)
+        ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT fk_dm_participants_user
+        FOREIGN KEY (user_id) REFERENCES users(id)
+        ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS dm_messages (
+    id VARCHAR(36) NOT NULL DEFAULT (UUID()),
+    conversation_id VARCHAR(36) NOT NULL,
+    sender_id VARCHAR(36) NOT NULL,
+    body TEXT NOT NULL,
+    is_read BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    KEY idx_dm_messages_conversation_id (conversation_id),
+    KEY idx_dm_messages_sender_id (sender_id),
+    KEY idx_dm_messages_created_at (created_at),
+
+    CONSTRAINT fk_dm_messages_conversation
+        FOREIGN KEY (conversation_id) REFERENCES dm_conversations(id)
+        ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT fk_dm_messages_sender
+        FOREIGN KEY (sender_id) REFERENCES users(id)
         ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
