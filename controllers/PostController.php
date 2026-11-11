@@ -50,18 +50,16 @@ class PostController
                 }
             }
 
-            $title          = trim((string)($body['title'] ?? ''));
             $description    = trim((string)($body['description'] ?? ''));
             $portfolioType  = trim((string)($body['portfolio_type'] ?? $body['portfolioType'] ?? 'link'));
             $externalUrlRaw = $body['external_url'] ?? $body['externalUrl'] ?? null;
             $mediaUrls      = $body['media_urls'] ?? $body['mediaUrls'] ?? [];
             $mediaPublicIds = $body['media_public_ids'] ?? $body['mediaPublicIds'] ?? [];
 
-            // 2. Validasi field wajib: title + description. media_urls
+            // 2. Validasi field wajib: description. media_urls
             // opsional sejak 2026-11-10 — post teks saja boleh (array
             // kosong); kalau dikirim harus berupa array.
             if (
-                $title === '' ||
                 $description === '' ||
                 !is_array($mediaUrls)
             ) {
@@ -80,7 +78,6 @@ class PostController
             // 4. Simpan post ke database melalui PostModel
             $result = PostModel::create([
                 'user_id'          => $userId,
-                'title'            => $title,
                 'description'      => $description,
                 'portfolio_type'   => in_array($portfolioType, ['link', 'images'], true) ? $portfolioType : 'link',
                 'external_url'     => $externalUrl,
@@ -224,16 +221,14 @@ class PostController
                 }
             }
 
-            $title          = trim((string)($body['title'] ?? ''));
             $description    = trim((string)($body['description'] ?? ''));
             $portfolioType  = trim((string)($body['portfolio_type'] ?? $body['portfolioType'] ?? 'link'));
             $externalUrlRaw = $body['external_url'] ?? $body['externalUrl'] ?? null;
             $mediaUrls      = $body['media_urls'] ?? $body['mediaUrls'] ?? null;
             $mediaPublicIds = $body['media_public_ids'] ?? $body['mediaPublicIds'] ?? [];
 
-            // Validasi field wajib sesuai Express baseline (title, description, externalUrl required)
+            // Validasi field wajib sesuai Express baseline (description, externalUrl required)
             if (
-                $title === '' ||
                 $description === '' ||
                 $externalUrlRaw === null || trim((string)$externalUrlRaw) === ''
             ) {
@@ -264,7 +259,6 @@ class PostController
 
             // 2. Update via model
             $result = PostModel::update($postId, [
-                'title'            => $title,
                 'description'      => $description,
                 'external_url'     => $externalUrl,
                 'portfolio_type'   => in_array($portfolioType, ['link', 'images'], true) ? $portfolioType : 'link',

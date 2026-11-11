@@ -21,7 +21,6 @@ class PostModel
      *
      * @param  array{
      *     user_id: string,
-     *     title: string,
      *     description: string,
      *     portfolio_type?: string,
      *     external_url?: ?string,
@@ -37,7 +36,6 @@ class PostModel
 
         $id = $data['id'] ?? self::generateUuid();
         $userId = $data['user_id'];
-        $title = $data['title'];
         $description = $data['description'];
         $portfolioType = $data['portfolio_type'] ?? 'link';
         $externalUrl = $data['external_url'] ?? null;
@@ -50,14 +48,13 @@ class PostModel
         try {
             // 1. Insert ke tabel public_posts
             $stmt = $pdo->prepare(
-                "INSERT INTO public_posts (id, user_id, title, description, portfolio_type, external_url, view_count)
-                 VALUES (:id, :user_id, :title, :description, :portfolio_type, :external_url, 0)"
+                "INSERT INTO public_posts (id, user_id, description, portfolio_type, external_url, view_count)
+                 VALUES (:id, :user_id, :description, :portfolio_type, :external_url, 0)"
             );
 
             $stmt->execute([
                 ':id'             => $id,
                 ':user_id'        => $userId,
-                ':title'          => $title,
                 ':description'    => $description,
                 ':portfolio_type' => $portfolioType,
                 ':external_url'   => $externalUrl,
@@ -100,7 +97,6 @@ class PostModel
         return [
             'id'               => $id,
             'user_id'          => $userId,
-            'title'            => $title,
             'description'      => $description,
             'portfolio_type'   => $portfolioType,
             'external_url'     => $externalUrl,
@@ -135,7 +131,6 @@ class PostModel
             SELECT 
                 p.id,
                 p.user_id,
-                p.title,
                 p.description,
                 p.portfolio_type,
                 p.external_url,
@@ -233,7 +228,6 @@ class PostModel
         return [
             'id' => $post['id'],
             'user_id' => $post['user_id'],
-            'title' => $post['title'],
             'description' => $post['description'],
             'portfolio_type' => $post['portfolio_type'],
             'external_url' => $post['external_url'],
@@ -409,7 +403,6 @@ class PostModel
             SELECT 
                 p.id,
                 p.user_id,
-                p.title,
                 p.description,
                 p.portfolio_type,
                 p.external_url,
@@ -501,7 +494,6 @@ class PostModel
                     'username'          => $p['username'] ?? '',
                     'photo_profile_url' => $p['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
                 ],
-                'title'            => $p['title'],
                 'description'      => $p['description'],
                 'portfolio_type'   => $p['portfolio_type'],
                 'external_url'     => $p['external_url'],
@@ -525,7 +517,6 @@ class PostModel
           *
           * @param  string $id UUID post
           * @param  array{
-          *     title: string,
           *     description: string,
           *     external_url: string,
           *     portfolio_type?: string,
@@ -547,7 +538,6 @@ class PostModel
                  return null; // post tidak ditemukan
              }
 
-             $title = $data['title'];
              $description = $data['description'];
              $externalUrl = $data['external_url'];
              $portfolioType = $data['portfolio_type'] ?? 'link';
@@ -560,8 +550,7 @@ class PostModel
              try {
                  $stmt = $pdo->prepare("
                      UPDATE public_posts 
-                     SET title = :title,
-                         description = :description,
+                     SET description = :description,
                          external_url = :external_url,
                          portfolio_type = :portfolio_type,
                          updated_at = CURRENT_TIMESTAMP
@@ -570,7 +559,6 @@ class PostModel
 
                  $stmt->execute([
                      ':id'             => $id,
-                     ':title'          => $title,
                      ':description'    => $description,
                      ':external_url'   => $externalUrl,
                      ':portfolio_type' => $portfolioType,

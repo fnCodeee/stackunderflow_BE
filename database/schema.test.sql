@@ -100,7 +100,6 @@ CREATE TABLE IF NOT EXISTS user_skill (
 CREATE TABLE IF NOT EXISTS public_posts (
     id VARCHAR(36) NOT NULL DEFAULT (UUID()),
     user_id VARCHAR(36) NOT NULL,
-    title VARCHAR(150) NOT NULL,
     description TEXT NOT NULL,
     portfolio_type ENUM('link', 'images') NOT NULL DEFAULT 'link',
     external_url VARCHAR(255) NULL,

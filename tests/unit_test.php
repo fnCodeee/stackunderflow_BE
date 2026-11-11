@@ -709,7 +709,7 @@ assertTest("Route PUT /api/posts/:postId Terdaftar di Router", isset($resRouteUp
 $postModelSourceUpdate = (string)file_get_contents(BASE_PATH . '/models/PostModel.php');
 assertTest("PostModel::update() Memeriksa Post Exists (SELECT user_id)", str_contains($postModelSourceUpdate, 'SELECT user_id FROM public_posts'));
 assertTest("PostModel::update() Menjalankan UPDATE public_posts", str_contains($postModelSourceUpdate, 'UPDATE public_posts'));
-assertTest("PostModel::update() Update title, description, external_url, portfolio_type", str_contains($postModelSourceUpdate, 'title = :title') && str_contains($postModelSourceUpdate, 'description = :description') && str_contains($postModelSourceUpdate, 'external_url = :external_url') && str_contains($postModelSourceUpdate, 'portfolio_type = :portfolio_type'));
+assertTest("PostModel::update() Update description, external_url, portfolio_type", str_contains($postModelSourceUpdate, 'description = :description') && str_contains($postModelSourceUpdate, 'external_url = :external_url') && str_contains($postModelSourceUpdate, 'portfolio_type = :portfolio_type'));
 assertTest("PostModel::update() Replace media_posts jika mediaUrls disediakan", str_contains($postModelSourceUpdate, 'DELETE FROM media_posts') && str_contains($postModelSourceUpdate, 'INSERT INTO media_posts'));
 assertTest("PostModel::update() Mengembalikan findDetailById", str_contains($postModelSourceUpdate, 'findDetailById'));
 
@@ -717,7 +717,7 @@ assertTest("PostModel::update() Mengembalikan findDetailById", str_contains($pos
 $postControllerSourceUpdate = (string)file_get_contents(BASE_PATH . '/controllers/PostController.php');
 assertTest("PostController::updatePost() Mengecek Auth (401 jika tidak login)", str_contains($postControllerSourceUpdate, '401'));
 assertTest("PostController::updatePost() Validasi postId parameter", str_contains($postControllerSourceUpdate, 'Post ID diperlukan'));
-assertTest("PostController::updatePost() Validasi Required Fields (title, description, external_url)", str_contains($postControllerSourceUpdate, 'title') && str_contains($postControllerSourceUpdate, 'description') && str_contains($postControllerSourceUpdate, 'externalUrl'));
+assertTest("PostController::updatePost() Validasi Required Fields (description, external_url)", str_contains($postControllerSourceUpdate, 'description') && str_contains($postControllerSourceUpdate, 'externalUrl'));
 assertTest("PostController::updatePost() Pesan Validasi Required: 'Tiap kolom wajib di isi!'", str_contains($postControllerSourceUpdate, 'Tiap kolom wajib di isi!'));
 assertTest("PostController::updatePost() Ownership Check (SELECT user_id & compare)", str_contains($postControllerSourceUpdate, 'SELECT user_id FROM public_posts') && str_contains($postControllerSourceUpdate, 'user_id !=='));
 assertTest("PostController::updatePost() 404 Jika Post Tidak Ditemukan: 'Postingan tidak ditemukan!'", str_contains($postControllerSourceUpdate, 'Postingan tidak ditemukan!'));
@@ -821,8 +821,8 @@ $nonOwnerId = 'fc6d488f-9b98-4237-a089-fcaa7552ffa5'; // raka
 // Buat post khusus uji coba
 $testPostId = PostModel::generateUuid();
 $pdo->prepare("
-    INSERT INTO public_posts (id, user_id, title, description, portfolio_type, external_url)
-    VALUES (:id, :user_id, 'Test Delete Post', 'Description for delete test', 'link', 'https://example.com')
+    INSERT INTO public_posts (id, user_id, description, portfolio_type, external_url)
+    VALUES (:id, :user_id, 'Description for delete test', 'link', 'https://example.com')
 ")->execute([':id' => $testPostId, ':user_id' => $ownerId]);
 
 // Tambahkan media dummy
@@ -947,8 +947,8 @@ $user1Id = '6355a749-9d9b-4784-a1f9-3a0a1cd64ab5'; // faiz
 $user2Id = 'fc6d488f-9b98-4237-a089-fcaa7552ffa5'; // raka
 
 $pdo->prepare("
-    INSERT INTO public_posts (id, user_id, title, description, portfolio_type, external_url)
-    VALUES (:id, :user_id, 'Post For Like Test', 'Description for like test', 'link', 'https://example.com')
+    INSERT INTO public_posts (id, user_id, description, portfolio_type, external_url)
+    VALUES (:id, :user_id, 'Description for like test', 'link', 'https://example.com')
 ")->execute([':id' => $likeTestPostId, ':user_id' => $user1Id]);
 
 // 4a. Request like tanpa token -> 401

@@ -82,9 +82,9 @@ class NotificationModel
         $stmt->execute([$actorId]);
         $actorName = (string)($stmt->fetchColumn() ?: 'Someone');
 
-        $stmt = $pdo->prepare('SELECT title FROM public_posts WHERE id = ? LIMIT 1');
+        $stmt = $pdo->prepare('SELECT description FROM public_posts WHERE id = ? LIMIT 1');
         $stmt->execute([$postId]);
-        $postTitle = (string)($stmt->fetchColumn() ?: '');
+        $postDescription = (string)($stmt->fetchColumn() ?: '');
 
         $id = self::generateUuid();
         $stmt = $pdo->prepare("
@@ -96,7 +96,7 @@ class NotificationModel
             $ownerId,
             $actorId,
             $actorName . ' liked your post',
-            self::truncate($postTitle),
+            self::truncate($postDescription),
             $postId,
         ]);
 
@@ -248,8 +248,8 @@ class NotificationModel
      * bentuk API yang dipakai GET /api/notifications — dipakai juga
      * untuk payload push realtime supaya bentuknya sama persis.
      *
-     * @param  array<string, mixed> $row Baris hasil query JOIN (punya actor_username, actor_photo, post_id, post_title)
-     * @return array<string, mixed> Bentuk API: {id, type, title, body, is_read, created_at, actor, postId, postTitle, link}
+     * @param  array<string, mixed> $row Baris hasil query JOIN (punya actor_username, actor_photo, post_id, post_description)
+     * @return array<string, mixed> Bentuk API: {id, type, title, body, is_read, created_at, actor, postId, postDescription, link}
      */
     public static function toApiRow(array $row): array
     {
@@ -267,7 +267,7 @@ class NotificationModel
                 'photo' => $row['actor_photo'] ?? null,
             ],
             'postId' => $postId,
-            'postTitle' => $row['post_title'] ?? null,
+            'postDescription' => $row['post_description'] ?? null,
             'link' => $postId ? '/dashboard/' . $postId : null,
         ];
     }
@@ -289,7 +289,7 @@ class NotificationModel
                 a.username AS actor_username,
                 pr.photo_profile_url AS actor_photo,
                 CASE WHEN n.type = 'like' THEN n.target_id ELSE c.post_id END AS post_id,
-                p.title AS post_title
+                p.description AS post_description
             FROM notifications n
             LEFT JOIN users a ON a.id = n.actor_id
             LEFT JOIN profiles pr ON pr.user_id = n.actor_id
@@ -335,7 +335,7 @@ class NotificationModel
 
     /**
      * Ambil notifikasi milik user, terbaru dulu, beserta nama + foto
-     * actor dan id + judul post yang dituju (untuk type 'like' postId =
+     * actor dan id + deskripsi post yang dituju (untuk type 'like' postId =
      * target_id; untuk type 'comment' postId diambil dari tabel comments).
      *
      * @param  string $userId UUID penerima notifikasi
@@ -352,7 +352,7 @@ class NotificationModel
                 a.username AS actor_username,
                 pr.photo_profile_url AS actor_photo,
                 CASE WHEN n.type = 'like' THEN n.target_id ELSE c.post_id END AS post_id,
-                p.title AS post_title
+                p.description AS post_description
             FROM notifications n
             LEFT JOIN users a ON a.id = n.actor_id
             LEFT JOIN profiles pr ON pr.user_id = n.actor_id
