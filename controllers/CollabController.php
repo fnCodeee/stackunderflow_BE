@@ -199,6 +199,18 @@ class CollabController
                 Response::json(null, 404, 'Collaboration not found', false);
             }
 
+            // my_application: status aplikasi user login di collab ini
+            // (null kalau tidak login / belum pernah apply). Status DB
+            // 'rejected' sudah dipetakan ke 'declined' oleh model.
+            $myUserId = $GLOBALS['user']['id'] ?? null;
+            $collab['my_application'] = null;
+            if ($myUserId !== null) {
+                $myApp = CollabModel::findApplication($collabId, (string) $myUserId);
+                if ($myApp !== null) {
+                    $collab['my_application'] = ['status' => $myApp['status']];
+                }
+            }
+
             Response::json($collab, 200, 'Detail collaboration', true);
         } catch (Throwable $e) {
             error_log('[COLLAB ERROR] ' . $e->getMessage());
@@ -513,6 +525,299 @@ class CollabController
      * @param  array<string, string> $params Path parameters dari Router (memuat 'id')
      * @return void
      */
+    /**
+     * Handler untuk POST /api/collab/:id/apply
+     * Mengajukan lamaran bergabung ke kolaborasi (status pending).
+     *
+     * - 401 jika tidak login, 404 jika collab tidak ada / soft-deleted
+     * - 403 jika pelamar adalah owner
+     * - 409 'Already applied' jika sudah ada aplikasi pending/accepted,
+     *   atau user sudah menjadi anggota
+     * - 409 'Collaboration is full' jika accepted == required_member
+     * - 201 {application} jika berhasil; apply ulang setelah ditolak
+     *   membuka lagi aplikasi lama (UNIQUE user_id+collab_id).
+     * Row collab dikunci di dalam transaksi supaya pengecekan kursi
+     * antar request yang bersamaan tidak bisa overbooked.
+     *
+     * @param  array<string, string> $params Path parameters dari Router (memuat 'id')
+     * @return void
+     */
+    public static function applyToCollab(array $params = []): void
+    {
+        $pdo = getDB();
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $collabId = $params['id'] ?? '';
+            if ($collabId === '') {
+                Response::json(null, 404, 'Collaboration not found', false);
+            }
+
+            // Ambil request body (pesan lamaran opsional)
+            $body = $GLOBALS['body'] ?? [];
+            if (empty($body)) {
+                $raw = file_get_contents('php://input');
+                if (!empty($raw)) {
+                    $decoded = json_decode($raw, true);
+                    if (is_array($decoded)) {
+                        $body = $decoded;
+                    }
+                }
+            }
+            $message = trim((string)($body['message'] ?? ''));
+            $message = $message === '' ? null : $message;
+
+            $pdo->beginTransaction();
+            try {
+                $locked = CollabModel::lockCollabForMembership($pdo, $collabId);
+                if (!$locked) {
+                    $pdo->rollBack();
+                    Response::json(null, 404, 'Collaboration not found', false);
+                }
+
+                if ((string)$locked['user_id'] === (string)$userId) {
+                    $pdo->rollBack();
+                    Response::json(null, 403, 'You cannot apply to your own project', false);
+                }
+
+                $existing = CollabModel::findApplication($collabId, (string)$userId);
+                if ($existing !== null && in_array($existing['status'], ['pending', 'accepted'], true)) {
+                    $pdo->rollBack();
+                    Response::json(null, 409, 'Already applied', false);
+                }
+
+                if (CollabModel::isMember($collabId, (string)$userId)) {
+                    $pdo->rollBack();
+                    Response::json(null, 409, 'Already a member', false);
+                }
+
+                $acceptedCount = CollabModel::countAcceptedMembers($collabId, $pdo);
+                if ($acceptedCount >= (int)$locked['required_member']) {
+                    $pdo->rollBack();
+                    Response::json(null, 409, 'Collaboration is full', false);
+                }
+
+                $application = $existing !== null
+                    ? CollabModel::reopenApplication($collabId, (string)$userId, $message)
+                    : CollabModel::createApplication($collabId, (string)$userId, $message);
+
+                $pdo->commit();
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                throw $e;
+            }
+
+            Response::json(['application' => $application], 201, 'Application submitted', true);
+        } catch (PDOException $e) {
+            // Balapan dua apply bersamaan: UNIQUE user_id+collab_id.
+            if ((string)$e->getCode() === '23000') {
+                Response::json(null, 409, 'Already applied', false);
+            }
+            error_log('[COLLAB APPLY ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat mengajukan lamaran', false);
+        } catch (Throwable $e) {
+            error_log('[COLLAB APPLY ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat mengajukan lamaran', false);
+        }
+    }
+
+    /**
+     * Handler untuk GET /api/collab/:id/applications
+     * Daftar aplikasi satu collab, hanya untuk owner (403 jika bukan).
+     * Urutan: pending dulu, lalu yang sudah diputuskan.
+     *
+     * @param  array<string, string> $params Path parameters dari Router (memuat 'id')
+     * @return void
+     */
+    public static function listApplications(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $collabId = $params['id'] ?? '';
+            if ($collabId === '') {
+                Response::json(null, 404, 'Collaboration not found', false);
+            }
+
+            $collab = CollabModel::findDetailById($collabId);
+            if (!$collab) {
+                Response::json(null, 404, 'Collaboration not found', false);
+            }
+
+            $ownerId = $collab['owner']['id'] ?? null;
+            if ((string)$ownerId !== (string)$userId) {
+                Response::json(null, 403, 'Only the owner can view applications', false);
+            }
+
+            $applications = CollabModel::listApplications($collabId);
+            Response::json($applications, 200, 'Applications', true);
+        } catch (Throwable $e) {
+            error_log('[COLLAB ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat mengambil daftar lamaran', false);
+        }
+    }
+
+    /**
+     * Handler untuk PUT /api/collab/:id/applications/:applicationId/accept
+     * Owner menerima lamaran: aplikasi -> accepted DAN pelamar masuk
+     * user_collaboration (anggota diterima) dalam satu transaksi.
+     *
+     * - 404 jika collab / aplikasi tidak ada
+     * - 403 jika bukan owner
+     * - 409 jika aplikasi sudah diputuskan, atau collab sudah penuh
+     *
+     * @param  array<string, string> $params Path parameters dari Router (memuat 'id', 'applicationId')
+     * @return void
+     */
+    public static function acceptApplication(array $params = []): void
+    {
+        $pdo = getDB();
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $collabId = $params['id'] ?? '';
+            $applicationId = $params['applicationId'] ?? '';
+            if ($collabId === '' || $applicationId === '') {
+                Response::json(null, 404, 'Application not found', false);
+            }
+
+            $pdo->beginTransaction();
+            try {
+                $locked = CollabModel::lockCollabForMembership($pdo, $collabId);
+                if (!$locked) {
+                    $pdo->rollBack();
+                    Response::json(null, 404, 'Collaboration not found', false);
+                }
+
+                if ((string)$locked['user_id'] !== (string)$userId) {
+                    $pdo->rollBack();
+                    Response::json(null, 403, 'Only the owner can review applications', false);
+                }
+
+                $application = CollabModel::findApplicationById($collabId, $applicationId);
+                if (!$application) {
+                    $pdo->rollBack();
+                    Response::json(null, 404, 'Application not found', false);
+                }
+
+                if ($application['status'] !== 'pending') {
+                    $pdo->rollBack();
+                    Response::json(null, 409, 'Application already decided', false);
+                }
+
+                $acceptedCount = CollabModel::countAcceptedMembers($collabId, $pdo);
+                if ($acceptedCount >= (int)$locked['required_member']) {
+                    $pdo->rollBack();
+                    Response::json(null, 409, 'Collaboration is full', false);
+                }
+
+                if (!CollabModel::acceptApplicationRow($pdo, $collabId, $applicationId)) {
+                    $pdo->rollBack();
+                    Response::json(null, 409, 'Application already decided', false);
+                }
+
+                CollabModel::insertMember($pdo, $collabId, (string)$application['user_id']);
+                $pdo->commit();
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                throw $e;
+            }
+
+            $fresh = CollabModel::findApplicationById($collabId, $applicationId);
+            $acceptedCount = CollabModel::countAcceptedMembers($collabId);
+            $availableSlots = max(0, (int)$locked['required_member'] - $acceptedCount);
+            Response::json([
+                'application' => $fresh,
+                'accepted_member_count' => $acceptedCount,
+                'available_slots' => $availableSlots,
+            ], 200, 'Application accepted', true);
+        } catch (PDOException $e) {
+            if ((string)$e->getCode() === '23000') {
+                Response::json(null, 409, 'Already a member', false);
+            }
+            error_log('[COLLAB ACCEPT ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat menerima lamaran', false);
+        } catch (Throwable $e) {
+            error_log('[COLLAB ACCEPT ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat menerima lamaran', false);
+        }
+    }
+
+    /**
+     * Handler untuk PUT /api/collab/:id/applications/:applicationId/decline
+     * Owner menolak lamaran: aplikasi -> rejected (diekspos 'declined').
+     * Pelamar boleh apply ulang sesudahnya (apply membuka lagi barisnya).
+     *
+     * - 404 jika collab / aplikasi tidak ada
+     * - 403 jika bukan owner
+     * - 409 jika aplikasi sudah diputuskan
+     *
+     * @param  array<string, string> $params Path parameters dari Router (memuat 'id', 'applicationId')
+     * @return void
+     */
+    public static function declineApplication(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $collabId = $params['id'] ?? '';
+            $applicationId = $params['applicationId'] ?? '';
+            if ($collabId === '' || $applicationId === '') {
+                Response::json(null, 404, 'Application not found', false);
+            }
+
+            $collab = CollabModel::findDetailById($collabId);
+            if (!$collab) {
+                Response::json(null, 404, 'Collaboration not found', false);
+            }
+
+            $ownerId = $collab['owner']['id'] ?? null;
+            if ((string)$ownerId !== (string)$userId) {
+                Response::json(null, 403, 'Only the owner can review applications', false);
+            }
+
+            $application = CollabModel::findApplicationById($collabId, $applicationId);
+            if (!$application) {
+                Response::json(null, 404, 'Application not found', false);
+            }
+
+            if ($application['status'] !== 'pending') {
+                Response::json(null, 409, 'Application already decided', false);
+            }
+
+            if (!CollabModel::declineApplicationRow($collabId, $applicationId)) {
+                Response::json(null, 409, 'Application already decided', false);
+            }
+
+            $fresh = CollabModel::findApplicationById($collabId, $applicationId);
+            Response::json(['application' => $fresh], 200, 'Application declined', true);
+        } catch (Throwable $e) {
+            error_log('[COLLAB DECLINE ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat menolak lamaran', false);
+        }
+    }
+
+
     public static function deleteCollab(array $params = []): void
     {
         try {

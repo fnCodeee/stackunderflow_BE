@@ -163,6 +163,10 @@ class CollabModel
                 'photo_profile_url' => $circlePhoto,
             ], $pdo);
 
+            // 5. Owner adalah anggota pertama (accepted): collab baru
+            //    mulai dengan accepted_member_count = 1.
+            self::insertMember($pdo, $id, $userId);
+
             // Commit seluruh transaksi jika semua tahapan berhasil
             $pdo->commit();
         } catch (Throwable $e) {
@@ -241,12 +245,18 @@ class CollabModel
         // 4. Ambil circle yang berelasi
         $circle = CircleModel::findByCollaborationId($id, $pdo);
 
+        // 5. Hitung jumlah anggota resmi (owner sudah terhitung sejak create)
+        $acceptedMemberCount = self::countAcceptedMembers($id, $pdo);
+        $requiredMember = (int) $collab['required_member'];
+
         return [
             'id' => $collab['id'],
             'user_id' => $collab['user_id'],
             'title' => $collab['title'],
             'description' => $collab['description'],
             'required_member' => (int) $collab['required_member'],
+            'accepted_member_count' => $acceptedMemberCount,
+            'available_slots' => max(0, $requiredMember - $acceptedMemberCount),
             'status' => $collab['status'],
             'type' => $collab['type'] ?? 'coursework',
             'due_date' => $collab['due_date'],
@@ -804,6 +814,282 @@ class CollabModel
      * @param  string $id UUID collaboration
      * @return bool True jika berhasil dihapus
      */
+    /**
+     * Status aplikasi di DB vs API.
+     *
+     * Kolom `collaboration_applications.status` adalah ENUM
+     * ('pending','accepted','rejected') - tidak ada nilai 'declined'.
+     * API mengekspos penolakan sebagai 'declined', jadi mapping ini
+     * dipakai di semua payload aplikasi yang keluar.
+     *
+     * @param  string $dbStatus Nilai status apa adanya dari database
+     * @return string Status yang diekspos ke API
+     */
+    public static function mapApplicationStatus(string $dbStatus): string
+    {
+        return $dbStatus === 'rejected' ? 'declined' : $dbStatus;
+    }
+
+    /**
+     * Jumlah anggota diterima (accepted) sebuah kolaborasi.
+     *
+     * Satu row di `user_collaboration` = satu anggota diterima; pelamar
+     * pending hanya ada di `collaboration_applications` dan tidak pernah
+     * masuk tabel ini, jadi COUNT(*) di sini sudah menghitung accepted
+     * saja. Kolom `status` di user_collaboration adalah progres tugas
+     * member (not-started/pending/complete/revise), BUKAN flag
+     * penerimaan - tidak ada filter status yang benar untuk dipakai.
+     *
+     * @param  string   $collabId UUID collaboration
+     * @param  PDO|null $pdo      Koneksi (dipakai saat di dalam transaksi)
+     * @return int Jumlah anggota diterima
+     */
+    public static function countAcceptedMembers(string $collabId, ?PDO $pdo = null): int
+    {
+        $pdo ??= getDB();
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM user_collaboration WHERE collaboration_id = :id");
+        $stmt->execute([':id' => $collabId]);
+        return (int) $stmt->fetchColumn();
+    }
+
+    /**
+     * Apakah user sudah menjadi anggota diterima di collab ini.
+     *
+     * @param  string $collabId UUID collaboration
+     * @param  string $userId   UUID user
+     * @return bool True jika ada row di user_collaboration
+     */
+    public static function isMember(string $collabId, string $userId): bool
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare("SELECT 1 FROM user_collaboration WHERE collaboration_id = :collab_id AND user_id = :user_id LIMIT 1");
+        $stmt->execute([':collab_id' => $collabId, ':user_id' => $userId]);
+        return (bool) $stmt->fetchColumn();
+    }
+
+    /**
+     * Kunci row collab untuk penulisan yang mengubah kursi (apply/accept).
+     * Wajib dipanggil di dalam transaksi; row lock ini membuat
+     * pengecekan "penuh" di semua request untuk collab yang sama
+     * berjalan berurutan sehingga kursi tidak bisa overbooked.
+     *
+     * @param  PDO    $pdo Koneksi transaksi
+     * @param  string $id  UUID collaboration
+     * @return array<string, mixed>|null Row collab atau null jika tidak ada / soft-deleted
+     */
+    public static function lockCollabForMembership(PDO $pdo, string $id): ?array
+    {
+        $stmt = $pdo->prepare("SELECT id, user_id, required_member FROM collaborations WHERE id = :id AND deleted_at IS NULL LIMIT 1 FOR UPDATE");
+        $stmt->execute([':id' => $id]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ?: null;
+    }
+
+    /**
+     * Masukkan anggota diterima. Dipakai saat create (owner) dan accept.
+     * Status member default 'not-started' (progres tugas, bukan penerimaan).
+     *
+     * @param  PDO    $pdo      Koneksi transaksi
+     * @param  string $collabId UUID collaboration
+     * @param  string $userId   UUID user
+     * @return void
+     */
+    public static function insertMember(PDO $pdo, string $collabId, string $userId): void
+    {
+        $stmt = $pdo->prepare(
+            "INSERT INTO user_collaboration (id, user_id, collaboration_id)
+             VALUES (:id, :user_id, :collaboration_id)"
+        );
+        $stmt->execute([
+            ':id' => self::generateUuid(),
+            ':user_id' => $userId,
+            ':collaboration_id' => $collabId,
+        ]);
+    }
+
+    /**
+     * Bentuk payload API untuk satu row collaboration_applications.
+     *
+     * @param  array<string, mixed> $row Row apa adanya dari database
+     * @return array<string, mixed> Row dengan status versi API
+     */
+    private static function presentApplication(array $row): array
+    {
+        return [
+            'id' => $row['id'],
+            'collaboration_id' => $row['collab_id'],
+            'user_id' => $row['user_id'],
+            'status' => self::mapApplicationStatus((string) $row['status']),
+            'message' => $row['message'],
+            'created_at' => $row['created_at'],
+        ];
+    }
+
+    /**
+     * Satu aplikasi user di satu collab (UNIQUE user_id+collab_id,
+     * jadi maksimal satu row per pasangan).
+     *
+     * @param  string $collabId UUID collaboration
+     * @param  string $userId   UUID user
+     * @return array<string, mixed>|null Aplikasi atau null jika belum pernah apply
+     */
+    public static function findApplication(string $collabId, string $userId): ?array
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare("SELECT id, collab_id, user_id, message, status, created_at FROM collaboration_applications WHERE collab_id = :collab_id AND user_id = :user_id LIMIT 1");
+        $stmt->execute([':collab_id' => $collabId, ':user_id' => $userId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$row) {
+            return null;
+        }
+        return self::presentApplication($row);
+    }
+
+    /**
+     * Satu aplikasi berdasarkan id-nya di dalam satu collab.
+     *
+     * @param  string $collabId      UUID collaboration
+     * @param  string $applicationId UUID application
+     * @return array<string, mixed>|null Aplikasi atau null jika tidak ada
+     */
+    public static function findApplicationById(string $collabId, string $applicationId): ?array
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare("SELECT id, collab_id, user_id, message, status, created_at FROM collaboration_applications WHERE id = :id AND collab_id = :collab_id LIMIT 1");
+        $stmt->execute([':id' => $applicationId, ':collab_id' => $collabId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$row) {
+            return null;
+        }
+        return self::presentApplication($row);
+    }
+
+    /**
+     * Buat aplikasi baru berstatus pending.
+     *
+     * @param  string      $collabId UUID collaboration
+     * @param  string      $userId   UUID pelamar
+     * @param  string|null $message  Pesan lamaran (opsional)
+     * @return array<string, mixed> Aplikasi yang baru dibuat
+     */
+    public static function createApplication(string $collabId, string $userId, ?string $message): array
+    {
+        $pdo = getDB();
+        $id = self::generateUuid();
+        $stmt = $pdo->prepare("INSERT INTO collaboration_applications (id, user_id, collab_id, message, status) VALUES (:id, :user_id, :collab_id, :message, 'pending')");
+        $stmt->execute([':id' => $id, ':user_id' => $userId, ':collab_id' => $collabId, ':message' => $message]);
+        $created = self::findApplicationById($collabId, $id);
+        if ($created !== null) {
+            return $created;
+        }
+        return [
+            'id' => $id,
+            'collaboration_id' => $collabId,
+            'user_id' => $userId,
+            'status' => 'pending',
+            'message' => $message,
+            'created_at' => null,
+        ];
+    }
+
+    /**
+     * Apply ulang setelah ditolak: baris lama (UNIQUE user_id+collab_id)
+     * tidak bisa diduplikasi, jadi statusnya dikembalikan ke pending.
+     *
+     * @param  string      $collabId UUID collaboration
+     * @param  string      $userId   UUID pelamar
+     * @param  string|null $message  Pesan lamaran baru (opsional, null = pertahankan yang lama)
+     * @return array<string, mixed> Aplikasi setelah dibuka ulang
+     */
+    public static function reopenApplication(string $collabId, string $userId, ?string $message): array
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare("UPDATE collaboration_applications SET status = 'pending', message = COALESCE(:message, message) WHERE collab_id = :collab_id AND user_id = :user_id");
+        $stmt->execute([':message' => $message, ':collab_id' => $collabId, ':user_id' => $userId]);
+        $reopened = self::findApplication($collabId, $userId);
+        if ($reopened !== null) {
+            return $reopened;
+        }
+        return [
+            'id' => '',
+            'collaboration_id' => $collabId,
+            'user_id' => $userId,
+            'status' => 'pending',
+            'message' => $message,
+            'created_at' => null,
+        ];
+    }
+
+    /**
+     * Daftar aplikasi satu collab untuk owner. Urutan: pending dulu
+     * (paling lama menunggu paling atas), lalu yang sudah diputuskan.
+     *
+     * @param  string $collabId UUID collaboration
+     * @return array<int, array<string, mixed>>
+     */
+    public static function listApplications(string $collabId): array
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare(
+            "SELECT ca.id, ca.user_id, u.username, pr.photo_profile_url, ca.message, ca.status, ca.created_at
+             FROM collaboration_applications ca
+             JOIN users u ON u.id = ca.user_id
+             LEFT JOIN profiles pr ON pr.user_id = ca.user_id
+             WHERE ca.collab_id = :collab_id
+             ORDER BY (ca.status = 'pending') DESC, ca.created_at ASC"
+        );
+        $stmt->execute([':collab_id' => $collabId]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $result = [];
+        foreach ($rows as $row) {
+            $result[] = [
+                'id' => $row['id'],
+                'user_id' => $row['user_id'],
+                'username' => $row['username'] ?? '',
+                'photo_profile_url' => $row['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
+                'message' => $row['message'],
+                'status' => self::mapApplicationStatus((string) $row['status']),
+                'created_at' => $row['created_at'],
+            ];
+        }
+        return $result;
+    }
+
+    /**
+     * Ubah aplikasi pending menjadi accepted. Kondisi status='pending'
+     * di WHERE membuat flip ini atomik: kalau row sudah diputuskan
+     * duluan oleh request lain, tidak ada baris yang berubah.
+     *
+     * @param  PDO    $pdo           Koneksi transaksi
+     * @param  string $collabId      UUID collaboration
+     * @param  string $applicationId UUID application
+     * @return bool True jika satu baris berhasil diubah
+     */
+    public static function acceptApplicationRow(PDO $pdo, string $collabId, string $applicationId): bool
+    {
+        $stmt = $pdo->prepare("UPDATE collaboration_applications SET status = 'accepted' WHERE id = :id AND collab_id = :collab_id AND status = 'pending'");
+        $stmt->execute([':id' => $applicationId, ':collab_id' => $collabId]);
+        return $stmt->rowCount() > 0;
+    }
+
+    /**
+     * Ubah aplikasi pending menjadi rejected (diekspos sebagai 'declined').
+     * Sama atomiknya dengan acceptApplicationRow.
+     *
+     * @param  string $collabId      UUID collaboration
+     * @param  string $applicationId UUID application
+     * @return bool True jika satu baris berhasil diubah
+     */
+    public static function declineApplicationRow(string $collabId, string $applicationId): bool
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare("UPDATE collaboration_applications SET status = 'rejected' WHERE id = :id AND collab_id = :collab_id AND status = 'pending'");
+        $stmt->execute([':id' => $applicationId, ':collab_id' => $collabId]);
+        return $stmt->rowCount() > 0;
+    }
+
+
     public static function delete(string $id): bool
     {
         $pdo = getDB();

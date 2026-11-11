@@ -128,6 +128,12 @@ $router->put('/api/collab/:id', [AuthMiddleware::class, 'handle'], [CollabContro
 // Phase 4F: Delete Collaboration (auth required — sesuai Express baseline)
 $router->delete('/api/collab/:id', [AuthMiddleware::class, 'handle'], [CollabController::class, 'deleteCollab']);
 
+// Batch 2: apply + membership (audit P1-3, P1-5)
+$router->post('/api/collab/:id/apply', [AuthMiddleware::class, 'handle'], [CollabController::class, 'applyToCollab']);
+$router->get('/api/collab/:id/applications', [AuthMiddleware::class, 'handle'], [CollabController::class, 'listApplications']);
+$router->put('/api/collab/:id/applications/:applicationId/accept', [AuthMiddleware::class, 'handle'], [CollabController::class, 'acceptApplication']);
+$router->put('/api/collab/:id/applications/:applicationId/decline', [AuthMiddleware::class, 'handle'], [CollabController::class, 'declineApplication']);
+
 // ── SKILLS MODULE ─────────────────────────────────────────────────────────────
 // GET /api/skills: skill system + private skill milik user yang sedang login
 $router->get('/api/skills', [AuthMiddleware::class, 'handle'], [SkillController::class, 'getSkills']);
