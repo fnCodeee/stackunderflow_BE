@@ -167,6 +167,83 @@ class NotificationModel
     }
 
     /**
+     * Buat notifikasi like-komen untuk penulis komentar. Mengembalikan
+     * null kalau actor == penulis (tidak ada notifikasi untuk diri
+     * sendiri). Dedupe: satu like = satu notifikasi per actor+komen.
+     * target_id adalah id KOMEN (bukan post).
+     *
+     * @param  string $commentId UUID komen yang di-like
+     * @param  string $authorId  UUID penulis komen (penerima notifikasi)
+     * @param  string $actorId   UUID user yang me-like komen
+     * @param  string $content   Isi komen (dipakai sebagai body, dipotong)
+     * @return array<string, mixed>|null Baris notifikasi baru / yang sudah ada, atau null
+     */
+    public static function createCommentLikeNotification(string $commentId, string $authorId, string $actorId, string $content): ?array
+    {
+        if ($actorId === $authorId) {
+            return null;
+        }
+
+        $pdo = getDB();
+
+        // Dedupe: satu like = satu notifikasi per actor+komen.
+        $stmt = $pdo->prepare("SELECT * FROM notifications WHERE actor_id = ? AND target_id = ? AND type = 'comment_like' LIMIT 1");
+        $stmt->execute([$actorId, $commentId]);
+        $existing = $stmt->fetch();
+        if ($existing) {
+            return $existing;
+        }
+
+        $stmt = $pdo->prepare('SELECT username FROM users WHERE id = ? LIMIT 1');
+        $stmt->execute([$actorId]);
+        $actorName = (string)($stmt->fetchColumn() ?: 'Someone');
+
+        $id = self::generateUuid();
+        $stmt = $pdo->prepare("
+            INSERT INTO notifications (id, user_id, actor_id, type, title, body, target_type, target_id)
+            VALUES (?, ?, ?, 'comment_like', ?, ?, 'comment', ?)
+        ");
+        $stmt->execute([
+            $id,
+            $authorId,
+            $actorId,
+            $actorName . ' liked your comment',
+            self::truncate($content),
+            $commentId,
+        ]);
+
+        return self::findById($id);
+    }
+
+    /**
+     * Hapus notifikasi like-komen milik actor untuk sebuah komen
+     * (dipanggil saat like dibatalkan). Tidak ada baris yang cocok
+     * = tidak ada efek.
+     */
+    public static function deleteCommentLikeNotification(string $commentId, string $actorId): void
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare("DELETE FROM notifications WHERE actor_id = ? AND target_id = ? AND type = 'comment_like'");
+        $stmt->execute([$actorId, $commentId]);
+    }
+
+    /**
+     * Cari notifikasi like-komen milik actor untuk sebuah komen
+     * (id + penerima) — dipakai untuk push penghapusan saat like
+     * dibatalkan.
+     *
+     * @return array{id: string, user_id: string}|null
+     */
+    public static function findCommentLikeNotification(string $commentId, string $actorId): ?array
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare("SELECT id, user_id FROM notifications WHERE actor_id = ? AND target_id = ? AND type = 'comment_like' LIMIT 1");
+        $stmt->execute([$actorId, $commentId]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    /**
      * Mapping satu baris notifikasi (hasil getForUser / findApiRow) ke
      * bentuk API yang dipakai GET /api/notifications — dipakai juga
      * untuk payload push realtime supaya bentuknya sama persis.
@@ -216,7 +293,7 @@ class NotificationModel
             FROM notifications n
             LEFT JOIN users a ON a.id = n.actor_id
             LEFT JOIN profiles pr ON pr.user_id = n.actor_id
-            LEFT JOIN comments c ON c.id = n.target_id AND n.type = 'comment'
+            LEFT JOIN comments c ON c.id = n.target_id AND n.type IN ('comment', 'comment_like')
             LEFT JOIN public_posts p ON p.id = CASE WHEN n.type = 'like' THEN n.target_id ELSE c.post_id END
             WHERE n.id = ?
             LIMIT 1
@@ -279,7 +356,7 @@ class NotificationModel
             FROM notifications n
             LEFT JOIN users a ON a.id = n.actor_id
             LEFT JOIN profiles pr ON pr.user_id = n.actor_id
-            LEFT JOIN comments c ON c.id = n.target_id AND n.type = 'comment'
+            LEFT JOIN comments c ON c.id = n.target_id AND n.type IN ('comment', 'comment_like')
             LEFT JOIN public_posts p ON p.id = CASE WHEN n.type = 'like' THEN n.target_id ELSE c.post_id END
             WHERE n.user_id = ?
             ORDER BY n.created_at DESC

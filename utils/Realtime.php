@@ -106,4 +106,23 @@ class Realtime
             'payload' => ['likes' => $likes, 'commentCount' => $commentCount],
         ]);
     }
+
+    /**
+     * Broadcast jumlah like terbaru sebuah komentar ke semua socket
+     * yang terhubung — angka like komen naik live di detail post.
+     *
+     * @param  string $commentId UUID komentar
+     * @param  string $postId UUID post pemilik komentar
+     * @param  int    $likes Jumlah like komentar saat ini
+     * @return void
+     */
+    public static function publishCommentStats(string $commentId, string $postId, int $likes): void
+    {
+        self::publish([
+            'type' => 'comment-stats',
+            'commentId' => $commentId,
+            'postId' => $postId,
+            'payload' => ['likes' => $likes],
+        ]);
+    }
 }
