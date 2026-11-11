@@ -89,6 +89,10 @@ $router->get('/api/posts/:postId/comments', [AuthMiddleware::class, 'handle'], [
 $router->delete('/api/delete/comments/:commentId', [AuthMiddleware::class, 'handle'], [PostController::class, 'deleteComment']);
 $router->delete('/api/posts/:postId/comments/:commentId', [AuthMiddleware::class, 'handle'], [PostController::class, 'deleteComment']);
 
+// Like / Unlike Comment (auth required) — persisted like post likes.
+$router->post('/api/comments/:commentId/like', [AuthMiddleware::class, 'handle'], [PostController::class, 'likeComment']);
+$router->delete('/api/comments/:commentId/unlike', [AuthMiddleware::class, 'handle'], [PostController::class, 'unlikeComment']);
+
 // ── NOTIFICATIONS MODULE ──────────────────────────────────────────────────────
 // GET /api/notifications: daftar notifikasi milik user login (auth required)
 $router->get('/api/notifications', [AuthMiddleware::class, 'handle'], [NotificationController::class, 'listNotifications']);

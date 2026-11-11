@@ -15,6 +15,7 @@ declare(strict_types=1);
 require_once BASE_PATH . '/models/PostModel.php';
 require_once BASE_PATH . '/models/LikeModel.php';
 require_once BASE_PATH . '/models/CommentModel.php';
+require_once BASE_PATH . '/models/CommentLikeModel.php';
 require_once BASE_PATH . '/models/NotificationModel.php';
 require_once BASE_PATH . '/utils/Realtime.php';
 require_once BASE_PATH . '/utils/Response.php';
@@ -549,7 +550,7 @@ class PostController
                 Response::json(null, 404, 'Post not found', false);
             }
 
-            $comments = CommentModel::getByPostId($postId);
+            $comments = CommentModel::getByPostId($postId, $userId);
 
             Response::json($comments, 200, 'Success get comments', true);
         } catch (Throwable $e) {
@@ -615,6 +616,81 @@ class PostController
             }
 
             Response::json($comment, 200, 'Comment berhasil dihapus!', true);
+        } catch (Throwable $e) {
+            Response::json(null, 500, $e->getMessage(), false);
+        }
+    }
+    /**
+     * Handler untuk POST /api/comments/:commentId/like
+     * Menyukai sebuah komentar. Memerlukan AuthMiddleware (login wajib).
+     * Tidak ada notifikasi untuk like komentar (di luar scope).
+     *
+     * @param  array<string, string> $params Path parameters dari Router (commentId)
+     * @return void
+     */
+    public static function likeComment(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $commentId = $params['commentId'] ?? '';
+
+            if ($commentId === '') {
+                Response::json(null, 400, 'Comment ID diperlukan', false);
+            }
+
+            $comment = CommentModel::findById($commentId);
+            if (!$comment) {
+                Response::json(null, 404, 'Comment not found!', false);
+            }
+
+            $existingLike = CommentLikeModel::findLike($commentId, $userId);
+            if ($existingLike) {
+                Response::json(null, 400, 'Sudah like komentar ini', false);
+            }
+
+            CommentLikeModel::createLike($commentId, $userId);
+
+            Response::json(null, 201, 'Komentar berhasil di-like', true);
+        } catch (Throwable $e) {
+            Response::json(null, 500, $e->getMessage(), false);
+        }
+    }
+
+    /**
+     * Handler untuk DELETE /api/comments/:commentId/unlike
+     * Menghapus like dari komentar. Memerlukan AuthMiddleware (login wajib).
+     *
+     * @param  array<string, string> $params Path parameters dari Router (commentId)
+     * @return void
+     */
+    public static function unlikeComment(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $commentId = $params['commentId'] ?? '';
+
+            if ($commentId === '') {
+                Response::json(null, 400, 'Comment ID diperlukan', false);
+            }
+
+            $comment = CommentModel::findById($commentId);
+            if (!$comment) {
+                Response::json(null, 404, 'Comment not found!', false);
+            }
+
+            CommentLikeModel::deleteLike($commentId, $userId);
+
+            Response::json(null, 200, 'Like komentar berhasil dihapus', true);
         } catch (Throwable $e) {
             Response::json(null, 500, $e->getMessage(), false);
         }

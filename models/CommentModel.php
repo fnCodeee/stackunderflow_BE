@@ -142,7 +142,7 @@ class CommentModel
      * @param  string $postId UUID post
      * @return array<int, array<string, mixed>>
      */
-    public static function getByPostId(string $postId): array
+    public static function getByPostId(string $postId, ?string $currentUserId = null): array
     {
         $pdo = getDB();
         $sql = "
@@ -154,15 +154,17 @@ class CommentModel
                 c.created_at,
                 c.updated_at,
                 u.username,
-                pr.photo_profile_url
+                pr.photo_profile_url,
+                (SELECT COUNT(*) FROM comment_likes cl WHERE cl.comment_id = c.id) AS like_count,
+                (SELECT 1 FROM comment_likes cl2 WHERE cl2.comment_id = c.id AND cl2.user_id = ? LIMIT 1) AS is_liked
             FROM comments c
             LEFT JOIN users u ON c.user_id = u.id
             LEFT JOIN profiles pr ON c.user_id = pr.user_id
-            WHERE c.post_id = :post_id AND c.deleted_at IS NULL
+            WHERE c.post_id = ? AND c.deleted_at IS NULL
             ORDER BY c.created_at DESC
         ";
         $stmt = $pdo->prepare($sql);
-        $stmt->execute([':post_id' => $postId]);
+        $stmt->execute([$currentUserId ?? '', $postId]);
         $rows = $stmt->fetchAll();
 
         $comments = [];
@@ -189,6 +191,8 @@ class CommentModel
                 'created_at' => $row['created_at'],
                 'updatedAt'  => $row['updated_at'],
                 'updated_at' => $row['updated_at'],
+                'like_count' => (int)($row['like_count'] ?? 0),
+                'is_liked'   => (bool)($row['is_liked'] ?? false),
             ];
         }
 
