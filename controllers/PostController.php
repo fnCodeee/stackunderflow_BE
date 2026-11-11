@@ -16,6 +16,7 @@ require_once BASE_PATH . '/models/PostModel.php';
 require_once BASE_PATH . '/models/LikeModel.php';
 require_once BASE_PATH . '/models/CommentModel.php';
 require_once BASE_PATH . '/models/NotificationModel.php';
+require_once BASE_PATH . '/utils/Realtime.php';
 require_once BASE_PATH . '/utils/Response.php';
 
 class PostController
@@ -367,7 +368,21 @@ class PostController
             // Notifikasi untuk pemilik post — kegagalan di sini tidak
             // boleh menggagalkan like-nya sendiri.
             try {
-                NotificationModel::createLikeNotification($postId, $post['user_id'], $userId);
+                $notifRow = NotificationModel::createLikeNotification($postId, $post['user_id'], $userId);
+                if ($notifRow) {
+                    $apiRow = NotificationModel::findApiRow($notifRow['id']);
+                    if ($apiRow) {
+                        Realtime::publishNotification($post['user_id'], $apiRow);
+                    }
+                }
+            } catch (Throwable) {
+            }
+
+            // Angka like/komen terbaru -> semua browser yang terhubung
+            // (best-effort; kalau server realtime mati, polling yang cover).
+            try {
+                $counts = PostModel::getCounts($postId);
+                Realtime::publishPostStats($postId, $counts['likes'], $counts['commentCount']);
             } catch (Throwable) {
             }
 
@@ -404,11 +419,29 @@ class PostController
                 Response::json(null, 404, 'Post not found', false);
             }
 
+            // Cari dulu notifikasinya (id + penerima) sebelum dihapus,
+            // supaya penghapusan bisa di-push ke socket pemilik post.
+            $notifRow = null;
+            try {
+                $notifRow = NotificationModel::findLikeNotification($postId, $userId);
+            } catch (Throwable) {
+            }
+
             LikeModel::deleteLike($postId, $userId);
 
             // Like dibatalkan -> notifikasinya ikut hilang.
             try {
                 NotificationModel::deleteLikeNotification($postId, $userId);
+                if ($notifRow) {
+                    Realtime::publishNotificationRemoved($notifRow['user_id'], $notifRow['id']);
+                }
+            } catch (Throwable) {
+            }
+
+            // Angka like/komen terbaru -> semua browser yang terhubung.
+            try {
+                $counts = PostModel::getCounts($postId);
+                Realtime::publishPostStats($postId, $counts['likes'], $counts['commentCount']);
             } catch (Throwable) {
             }
 
@@ -466,7 +499,20 @@ class PostController
             // Notifikasi untuk pemilik post — kegagalan di sini tidak
             // boleh menggagalkan komennya sendiri.
             try {
-                NotificationModel::createCommentNotification($postId, $commentData['id'], $post['user_id'], $userId, $content);
+                $notifRow = NotificationModel::createCommentNotification($postId, $commentData['id'], $post['user_id'], $userId, $content);
+                if ($notifRow) {
+                    $apiRow = NotificationModel::findApiRow($notifRow['id']);
+                    if ($apiRow) {
+                        Realtime::publishNotification($post['user_id'], $apiRow);
+                    }
+                }
+            } catch (Throwable) {
+            }
+
+            // Angka like/komen terbaru -> semua browser yang terhubung.
+            try {
+                $counts = PostModel::getCounts($postId);
+                Realtime::publishPostStats($postId, $counts['likes'], $counts['commentCount']);
             } catch (Throwable) {
             }
 
@@ -542,11 +588,29 @@ class PostController
                 Response::json(null, 403, 'Bukan komentar milikmu', false);
             }
 
+            // Cari dulu notifikasinya (id + penerima) sebelum dihapus,
+            // supaya penghapusan bisa di-push ke socket pemilik post.
+            $notifRow = null;
+            try {
+                $notifRow = NotificationModel::findCommentNotification($commentId);
+            } catch (Throwable) {
+            }
+
             CommentModel::delete($commentId);
 
             // Komen dihapus -> notifikasinya ikut hilang.
             try {
                 NotificationModel::deleteCommentNotification($commentId);
+                if ($notifRow) {
+                    Realtime::publishNotificationRemoved($notifRow['user_id'], $notifRow['id']);
+                }
+            } catch (Throwable) {
+            }
+
+            // Angka like/komen terbaru -> semua browser yang terhubung.
+            try {
+                $counts = PostModel::getCounts($comment['post_id']);
+                Realtime::publishPostStats($comment['post_id'], $counts['likes'], $counts['commentCount']);
             } catch (Throwable) {
             }
 

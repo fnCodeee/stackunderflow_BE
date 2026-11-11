@@ -342,6 +342,30 @@ class PostModel
     }
 
     /**
+     * Hitung jumlah like + komen sebuah post saat ini — dipakai untuk
+     * push post-stats ke realtime setelah like/unlike/komen.
+     * Komen yang sudah soft-deleted tidak dihitung (deleted_at IS NULL),
+     * sama seperti penghitungan di getAll.
+     *
+     * @param  string $postId UUID post
+     * @return array{likes: int, commentCount: int}
+     */
+    public static function getCounts(string $postId): array
+    {
+        $pdo = getDB();
+
+        $stmt = $pdo->prepare('SELECT COUNT(*) FROM like_posts WHERE post_id = ?');
+        $stmt->execute([$postId]);
+        $likes = (int)$stmt->fetchColumn();
+
+        $stmt = $pdo->prepare('SELECT COUNT(*) FROM comments WHERE post_id = ? AND deleted_at IS NULL');
+        $stmt->execute([$postId]);
+        $commentCount = (int)$stmt->fetchColumn();
+
+        return ['likes' => $likes, 'commentCount' => $commentCount];
+    }
+
+    /**
      * Soft delete post berdasarkan ID (berguna untuk testing/cleanup).
      *
      * @param  string $id

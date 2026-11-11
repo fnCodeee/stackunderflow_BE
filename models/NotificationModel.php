@@ -167,6 +167,96 @@ class NotificationModel
     }
 
     /**
+     * Mapping satu baris notifikasi (hasil getForUser / findApiRow) ke
+     * bentuk API yang dipakai GET /api/notifications — dipakai juga
+     * untuk payload push realtime supaya bentuknya sama persis.
+     *
+     * @param  array<string, mixed> $row Baris hasil query JOIN (punya actor_username, actor_photo, post_id, post_title)
+     * @return array<string, mixed> Bentuk API: {id, type, title, body, is_read, created_at, actor, postId, postTitle, link}
+     */
+    public static function toApiRow(array $row): array
+    {
+        $postId = $row['post_id'] ?? null;
+        return [
+            'id' => $row['id'],
+            'type' => $row['type'],
+            'title' => $row['title'],
+            'body' => $row['body'],
+            'is_read' => (bool)$row['is_read'],
+            'created_at' => $row['created_at'],
+            'actor' => [
+                'id' => $row['actor_id'],
+                'username' => $row['actor_username'] ?? null,
+                'photo' => $row['actor_photo'] ?? null,
+            ],
+            'postId' => $postId,
+            'postTitle' => $row['post_title'] ?? null,
+            'link' => $postId ? '/dashboard/' . $postId : null,
+        ];
+    }
+
+    /**
+     * Ambil satu notifikasi dalam bentuk API (JOIN actor + post, seperti
+     * getForUser) — dipakai untuk payload push realtime setelah create.
+     *
+     * @param  string $id UUID notifikasi
+     * @return array<string, mixed>|null Baris bentuk API, atau null kalau tidak ada
+     */
+    public static function findApiRow(string $id): ?array
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare("
+            SELECT
+                n.id, n.type, n.title, n.body, n.is_read, n.created_at,
+                n.actor_id, n.target_id,
+                a.username AS actor_username,
+                pr.photo_profile_url AS actor_photo,
+                CASE WHEN n.type = 'like' THEN n.target_id ELSE c.post_id END AS post_id,
+                p.title AS post_title
+            FROM notifications n
+            LEFT JOIN users a ON a.id = n.actor_id
+            LEFT JOIN profiles pr ON pr.user_id = n.actor_id
+            LEFT JOIN comments c ON c.id = n.target_id AND n.type = 'comment'
+            LEFT JOIN public_posts p ON p.id = CASE WHEN n.type = 'like' THEN n.target_id ELSE c.post_id END
+            WHERE n.id = ?
+            LIMIT 1
+        ");
+        $stmt->execute([$id]);
+        $row = $stmt->fetch();
+        return $row ? self::toApiRow($row) : null;
+    }
+
+    /**
+     * Cari notifikasi like milik actor untuk sebuah post (id + penerima)
+     * — dipakai untuk push penghapusan saat like dibatalkan.
+     *
+     * @return array{id: string, user_id: string}|null
+     */
+    public static function findLikeNotification(string $postId, string $actorId): ?array
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare("SELECT id, user_id FROM notifications WHERE actor_id = ? AND target_id = ? AND type = 'like' LIMIT 1");
+        $stmt->execute([$actorId, $postId]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    /**
+     * Cari notifikasi komen berdasarkan id komennya (id + penerima)
+     * — dipakai untuk push penghapusan saat komen dihapus.
+     *
+     * @return array{id: string, user_id: string}|null
+     */
+    public static function findCommentNotification(string $commentId): ?array
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare("SELECT id, user_id FROM notifications WHERE target_id = ? AND type = 'comment' LIMIT 1");
+        $stmt->execute([$commentId]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    /**
      * Ambil notifikasi milik user, terbaru dulu, beserta nama + foto
      * actor dan id + judul post yang dituju (untuk type 'like' postId =
      * target_id; untuk type 'comment' postId diambil dari tabel comments).

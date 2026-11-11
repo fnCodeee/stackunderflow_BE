@@ -40,25 +40,7 @@ class NotificationController
 
             $rows = NotificationModel::getForUser($userId);
 
-            $data = array_map(static function (array $row): array {
-                $postId = $row['post_id'] ?? null;
-                return [
-                    'id' => $row['id'],
-                    'type' => $row['type'],
-                    'title' => $row['title'],
-                    'body' => $row['body'],
-                    'is_read' => (bool)$row['is_read'],
-                    'created_at' => $row['created_at'],
-                    'actor' => [
-                        'id' => $row['actor_id'],
-                        'username' => $row['actor_username'],
-                        'photo' => $row['actor_photo'],
-                    ],
-                    'postId' => $postId,
-                    'postTitle' => $row['post_title'] ?? null,
-                    'link' => $postId ? '/dashboard/' . $postId : null,
-                ];
-            }, $rows);
+            $data = array_map([NotificationModel::class, 'toApiRow'], $rows);
 
             Response::json($data, 200, 'Success get notifications', true);
         } catch (Throwable $e) {
