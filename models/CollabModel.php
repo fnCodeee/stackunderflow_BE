@@ -186,6 +186,8 @@ class CollabModel
             'description' => $description,
             'required_member' => $requiredMember,
             'status' => $status,
+            'type' => $type,
+            'due_date' => $dueDate,
             'media_urls' => $mediaUrls,
             'media_public_ids' => $mediaPublicIds,
             'skills_needed' => $skillsNeeded,
@@ -246,6 +248,8 @@ class CollabModel
             'description' => $collab['description'],
             'required_member' => (int) $collab['required_member'],
             'status' => $collab['status'],
+            'type' => $collab['type'] ?? 'coursework',
+            'due_date' => $collab['due_date'],
             'media_urls' => $mediaUrls,
             'media_public_ids' => $mediaPublicIds,
             'skills_needed' => $skills,
@@ -791,9 +795,8 @@ class CollabModel
     }
 
     /**
-     * Menghapus postingan kolaborasi berdasarkan ID.
-     * Menggunakan transaction PDO. Foreign key CASCADE pada InnoDB secara otomatis
-     * Soft delete collaboration: set deleted_at = NOW(). Row tetap ada
+     * Soft delete postingan kolaborasi berdasarkan ID: set deleted_at = NOW().
+     * Row tetap ada
      * di database (bisa di-restore / diaudit); relasi (collab_media,
      * collab_skills, circle, zone, applications, user_collaboration)
      * TIDAK dihapus.

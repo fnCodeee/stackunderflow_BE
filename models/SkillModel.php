@@ -151,6 +151,9 @@ class SkillModel
 
     /**
      * Mengecek apakah skill masih digunakan oleh relasi collab_skills.
+     * Hanya menghitung referensi dari kolaborasi yang masih aktif
+     * (deleted_at IS NULL): skill yang hanya dipakai kolaborasi yang
+     * sudah di-soft-delete dianggap tidak dipakai dan boleh dihapus.
      *
      * @param  string $skillId
      * @return int Jumlah record di collab_skills yang mereferensikan skill ini
@@ -160,7 +163,9 @@ class SkillModel
         $pdo = getDB();
 
         $stmt = $pdo->prepare(
-            "SELECT COUNT(*) FROM collab_skills WHERE skill_id = :skill_id"
+            "SELECT COUNT(*) FROM collab_skills cs
+             JOIN collaborations c ON cs.collab_id = c.id
+             WHERE cs.skill_id = :skill_id AND c.deleted_at IS NULL"
         );
         $stmt->execute([':skill_id' => $skillId]);
 

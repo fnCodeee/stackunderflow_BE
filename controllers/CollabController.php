@@ -69,8 +69,19 @@ class CollabController
             }
 
             $requiredMemberInt = (int)$requiredMember;
-            if ($requiredMemberInt < 1) {
-                Response::json(null, 400, 'Seluruh Kolom wajib diisi.', false);
+            if ($requiredMemberInt < 1 || $requiredMemberInt > 10) {
+                Response::json(null, 400, 'requiredMember harus angka 1-10', false);
+            }
+
+            // Validasi due_date: tidak boleh di masa lalu (bandingkan tanggal saja)
+            if ($dueDate !== null && $dueDate !== '') {
+                $dueTimestamp = strtotime((string)$dueDate);
+                if ($dueTimestamp === false) {
+                    Response::json(null, 400, 'Format due_date tidak valid', false);
+                }
+                if (date('Y-m-d', $dueTimestamp) < date('Y-m-d')) {
+                    Response::json(null, 400, 'due_date tidak boleh di masa lalu', false);
+                }
             }
 
             // 3. Validasi konsistensi jumlah mediaUrls dan mediaPublicIds jika mediaPublicIds dikirim
@@ -212,18 +223,15 @@ class CollabController
             }
 
             $targetUserId = $params['userId'] ?? '';
-            if($userId !== $targetUserId) {
-                Response::json(null, 404, 'Bukan Punya elu', false);
-            }
-
-
             if ($targetUserId === '') {
                 Response::json(null, 404, 'Collaboration Post not found!', false);
             }
 
+            // Daftar kolaborasi user mana pun boleh dilihat (bukan hanya milik sendiri);
+            // user tanpa kolaborasi mendapat list kosong, bukan 404.
             $collabs = CollabModel::getByUserId($targetUserId);
             if (empty($collabs)) {
-                Response::json(null, 404, 'Collaboration Post not found!', false);
+                Response::json([], 200, 'No Collaboration Post found', true);
             }
 
             $username = $collabs[0]['userId']['username'] ?? '';
@@ -307,11 +315,12 @@ class CollabController
             $mediaUrls      = $body['media_urls'] ?? $body['mediaUrls'] ?? null;
             $mediaPublicIds = $body['media_public_ids'] ?? $body['mediaPublicIds'] ?? null;
             $skillsNeeded   = $body['skills_needed'] ?? $body['skillsNeeded'] ?? null;
+            $dueDate        = $body['due_date'] ?? $body['dueDate'] ?? null;
 
             // Validasi field media (jika ada) mengikuti Express baseline
             // Jika disediakan, mediaUrls dan mediaPublicIds harus konsisten dan tidak kosong
             if (is_array($mediaPublicIds) && count($mediaPublicIds) > 0) {
-                if (count($mediaUrls) !== count($mediaPublicIds) || count($mediaUrls) === 0) {
+                if (!is_array($mediaUrls) || count($mediaUrls) !== count($mediaPublicIds) || count($mediaUrls) === 0) {
                     Response::json(null, 400, 'Jika mediaPublicIds disediakan, mediaUrls dan mediaPublicIds harus sama dan tidak kosong', false);
                 }
             }
@@ -339,51 +348,34 @@ class CollabController
             if ($description !== '' && $description !== null) {
                 $updateData['description'] = $description;
             }
+            // Validasi status: hanya nilai ENUM collaborations.status yang diterima
+            // (open / in-progress / completed — migration 20261110). Nilai lain
+            // ditolak 400 SEBELUM ada tulisan apa pun, supaya tidak ada partial update.
             if ($status !== '' && $status !== null) {
+                if (!in_array($status, ['open', 'in-progress', 'completed'], true)) {
+                    Response::json(null, 400, 'Status tidak valid. Status harus open, in-progress, atau completed', false);
+                }
                 $updateData['status'] = $status;
             }
             if ($requiredMember !== null && $requiredMember !== '') {
-                if (!is_numeric($requiredMember) || intval($requiredMember) < 1) {
-                    Response::json(null, 400, 'requiredMember harus angka minimal 1', false);
+                if (!is_numeric($requiredMember) || intval($requiredMember) < 1 || intval($requiredMember) > 10) {
+                    Response::json(null, 400, 'requiredMember harus angka 1-10', false);
                 }
                 $updateData['required_member'] = (int)$requiredMember;
             }
-
-            // Update media jika disediakan (mediaUrls + mediaPublicIds)
-            // Jika mediaUrls dan mediaPublicIds dikirim, jalankan update dengan logika SAME COUNT
-            if (is_array($mediaUrls) && is_array($mediaPublicIds) && count($mediaPublicIds) === count($mediaUrls) && count($mediaUrls) > 0) {
-                // Hapus media lama dan insert media yang baru
-                // UPDATE: DELETE + INSERT (SETAVIS)
-                $pdo->beginTransaction();
-                try {
-                    // Hapus media lama
-                    $delStmt = $pdo->prepare("DELETE FROM collab_media WHERE collab_id = :collab_id");
-                    $delStmt->execute([':collab_id' => $collabId]);
-
-                    // Insert media baru
-                    if (count($mediaUrls) > 0) {
-                        $insStmt = $pdo->prepare("INSERT INTO collab_media (id, collab_id, media_url, media_public_id) VALUES (:id, :collab_id, :media_url, :media_public_id)");
-                        foreach ($mediaUrls as $index => $mediaUrl) {
-                            $mediaId = CollabModel::generateUuid();
-                            $mediaPublicId = $mediaPublicIds[$index] ?? null;
-                            $insStmt->execute([
-                                ':id'              => $mediaId,
-                                ':collab_id'       => $collabId,
-                                ':media_url'       => $mediaUrl,
-                                ':media_public_id' => $mediaPublicId,
-                            ]);
-                        }
-                    }
-                    $pdo->commit();
-                } catch (Throwable $e) {
-                    if ($pdo->inTransaction()) {
-                        $pdo->rollBack();
-                    }
-                    Response::json(null, 500, 'Gagal memperbarui media: ' . $e->getMessage(), false);
+            if ($dueDate !== null && $dueDate !== '') {
+                $dueTimestamp = strtotime((string)$dueDate);
+                if ($dueTimestamp === false) {
+                    Response::json(null, 400, 'Format due_date tidak valid', false);
                 }
+                if (date('Y-m-d', $dueTimestamp) < date('Y-m-d')) {
+                    Response::json(null, 400, 'due_date tidak boleh di masa lalu', false);
+                }
+                $updateData['due_date'] = date('Y-m-d', $dueTimestamp);
             }
 
-            // Update skills jika disediakan
+            // Validasi skills jika disediakan — tanpa menulis apa pun dulu.
+            $normalizedSkillIds = null;
             if (is_array($skillsNeeded) && count($skillsNeeded) > 0) {
                 $normalizedSkillIds = [];
                 foreach ($skillsNeeded as $skill) {
@@ -417,14 +409,45 @@ class CollabController
                 if ($skillValidationError !== null) {
                     Response::json(null, 400, $skillValidationError, false);
                 }
+            }
 
-                $pdo->beginTransaction();
-                try {
-                    // Hapus skills lama
+            // Media hanya diupdate kalau mediaUrls + mediaPublicIds dikirim berpasangan.
+            $hasMediaUpdate = is_array($mediaUrls)
+                && is_array($mediaPublicIds)
+                && count($mediaUrls) > 0
+                && count($mediaPublicIds) === count($mediaUrls);
+
+            if (empty($updateData) && $normalizedSkillIds === null && !$hasMediaUpdate) {
+                Response::json(null, 400, 'Tidak ada data yang diperbarui', false);
+            }
+
+            // SATU transaksi untuk seluruh update (media + skills + circle + collaborations):
+            // gagal di satu bagian = rollback semuanya, tidak ada partial update.
+            $pdo->beginTransaction();
+            try {
+                // Update media (DELETE + INSERT)
+                if ($hasMediaUpdate) {
+                    $delStmt = $pdo->prepare("DELETE FROM collab_media WHERE collab_id = :collab_id");
+                    $delStmt->execute([':collab_id' => $collabId]);
+
+                    $insStmt = $pdo->prepare("INSERT INTO collab_media (id, collab_id, media_url, media_public_id) VALUES (:id, :collab_id, :media_url, :media_public_id)");
+                    foreach ($mediaUrls as $index => $mediaUrl) {
+                        $mediaId = CollabModel::generateUuid();
+                        $mediaPublicId = $mediaPublicIds[$index] ?? null;
+                        $insStmt->execute([
+                            ':id'              => $mediaId,
+                            ':collab_id'       => $collabId,
+                            ':media_url'       => $mediaUrl,
+                            ':media_public_id' => $mediaPublicId,
+                        ]);
+                    }
+                }
+
+                // Update skills (DELETE + INSERT)
+                if ($normalizedSkillIds !== null) {
                     $delSkillStmt = $pdo->prepare("DELETE FROM collab_skills WHERE collab_id = :collab_id");
                     $delSkillStmt->execute([':collab_id' => $collabId]);
 
-                    // Insert skills baru
                     $insSkillStmt = $pdo->prepare("INSERT INTO collab_skills (id, collab_id, skill_id) VALUES (:id, :collab_id, :skill_id)");
                     foreach ($normalizedSkillIds as $skillId) {
                         $ssId = CollabModel::generateUuid();
@@ -434,49 +457,32 @@ class CollabController
                             ':skill_id'  => $skillId,
                         ]);
                     }
-                    $pdo->commit();
-                } catch (Throwable $e) {
-                    if ($pdo->inTransaction()) {
-                        $pdo->rollBack();
+                }
+
+                // UPDATE utama tabel collaborations — title ditulis SEKALI di sini.
+                if (!empty($updateData)) {
+                    $setClause = [];
+                    foreach (array_keys($updateData) as $key) {
+                        $setClause[] = "$key = :$key";
                     }
-                    Response::json(null, 500, 'Gagal memperbarui skills: ' . $e->getMessage(), false);
-                }
-            }
+                    $setClauseStr = implode(', ', $setClause);
+                    $updateStmt = $pdo->prepare("UPDATE collaborations SET $setClauseStr WHERE id = :id");
+                    $updateStmt->execute(array_merge($updateData, [':id' => $collabId]));
 
-            // Update title di tabel collaborations jika title diberikan
-            // Jika title diupdate, update juga circle.title agar konsisten
-            if (isset($updateData['title']) && $updateData['title'] !== $existing['title']) {
-                $pdo->beginTransaction();
-                try {
-                    $collabStmt = $pdo->prepare("UPDATE collaborations SET title = :title WHERE id = :id");
-                    $collabStmt->execute([':title' => $updateData['title'], ':id' => $collabId]);
-
-                    // Otomatis update title circle
-                    $circleStmt = $pdo->prepare("UPDATE circle SET title = :title WHERE collaboration_id = :collab_id");
-                    $circleStmt->execute([':title' => $updateData['title'], ':collab_id' => $collabId]);
-
-                    $pdo->commit();
-                } catch (Throwable $e) {
-                    if ($pdo->inTransaction()) {
-                        $pdo->rollBack();
+                    // Title circle ikut diupdate agar konsisten dengan title collab.
+                    if (isset($updateData['title'])) {
+                        $circleStmt = $pdo->prepare("UPDATE circle SET title = :title WHERE collaboration_id = :collab_id");
+                        $circleStmt->execute([':title' => $updateData['title'], ':collab_id' => $collabId]);
                     }
-                    Response::json(null, 500, 'Gagal memperbarui collaborations atau circle: ' . $e->getMessage(), false);
                 }
-            }
 
-            // Jalankan UPDATE utama
-            error_log('UPDATE DATA: ' . json_encode($updateData));
-            
-            if (!empty($updateData)) {
-                $setClause = [];
-                foreach (array_keys($updateData) as $key) {
-                    $setClause[] = "$key = :$key";
+                $pdo->commit();
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
                 }
-                $setClauseStr = implode(', ', $setClause);
-                $updateStmt = $pdo->prepare("UPDATE collaborations SET $setClauseStr WHERE id = :id");
-                $updateStmt->execute(array_merge($updateData, [':id' => $collabId]));
-            } else {
-                Response::json(null, 400, 'Tidak ada data yang diperbarui', false);
+                error_log('[COLLAB UPDATE ERROR] ' . $e->getMessage());
+                Response::json(null, 500, 'Gagal memperbarui kolaborasi', false);
             }
 
             // Ambil data terbaru
@@ -487,7 +493,8 @@ class CollabController
                 Response::json(null, 404, 'Postingan kolaborasi tidak ditemukan!', false);
             }
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[COLLAB ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat memperbarui kolaborasi', false);
         }
     }
     
@@ -534,7 +541,9 @@ class CollabController
                 Response::json(null, 403, 'Bukan hak lu buat hapus collab ini!', false);
             }
 
-            // Hapus kolaborasi dari database (CASCADE akan membersihkan child tables secara atomik)
+            // Soft delete kolaborasi (deleted_at = NOW()). Child tables
+            // (collab_media, collab_skills, circle, applications, user_collaboration)
+            // TIDAK dihapus — tidak ada CASCADE di sini.
             CollabModel::delete($collabId);
 
             Response::json($collab, 200, 'Postingan kolaborasi berhasil dihapus!', true);
