@@ -381,7 +381,6 @@ CREATE TABLE IF NOT EXISTS notifications (
     actor_id VARCHAR(36) NULL,
     `type` VARCHAR(50) NOT NULL,
     title VARCHAR(255) NOT NULL,
-    body TEXT NULL,
     target_type VARCHAR(50) NULL,
     target_id VARCHAR(36) NULL,
     is_read BOOLEAN NOT NULL DEFAULT FALSE,

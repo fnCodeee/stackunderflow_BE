@@ -494,7 +494,7 @@ class PostController
             // Notifikasi untuk pemilik post — kegagalan di sini tidak
             // boleh menggagalkan komennya sendiri.
             try {
-                $notifRow = NotificationModel::createCommentNotification($postId, $commentData['id'], $post['user_id'], $userId, $content);
+                $notifRow = NotificationModel::createCommentNotification($postId, $commentData['id'], $post['user_id'], $userId);
                 if ($notifRow) {
                     $apiRow = NotificationModel::findApiRow($notifRow['id']);
                     if ($apiRow) {
@@ -652,7 +652,7 @@ class PostController
             // Like komen -> notifikasi untuk penulis komen (best-effort;
             // tidak boleh menggagalkan like-nya sendiri).
             try {
-                $notifRow = NotificationModel::createCommentLikeNotification($commentId, $comment['user_id'], $userId, $comment['content']);
+                $notifRow = NotificationModel::createCommentLikeNotification($commentId, $comment['user_id'], $userId);
                 if ($notifRow) {
                     $apiRow = NotificationModel::findApiRow($notifRow['id']);
                     if ($apiRow) {

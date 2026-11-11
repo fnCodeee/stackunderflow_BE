@@ -24,19 +24,6 @@ require_once BASE_PATH . '/config/database.php';
 
 class NotificationModel
 {
-    /** Panjang maksimal body notifikasi (judul post / isi komen dipotong). */
-    private const BODY_LIMIT = 120;
-
-    /**
-     * Potong teks ke limit; tambah "..." hanya kalau benar-benar dipotong.
-     */
-    private static function truncate(string $text, int $limit = self::BODY_LIMIT): string
-    {
-        if (mb_strlen($text) <= $limit) {
-            return $text;
-        }
-        return mb_substr($text, 0, $limit - 3) . '...';
-    }
 
     /**
      * Ambil satu baris notifikasi berdasarkan id (untuk dikembalikan
@@ -82,21 +69,17 @@ class NotificationModel
         $stmt->execute([$actorId]);
         $actorName = (string)($stmt->fetchColumn() ?: 'Someone');
 
-        $stmt = $pdo->prepare('SELECT description FROM public_posts WHERE id = ? LIMIT 1');
-        $stmt->execute([$postId]);
-        $postDescription = (string)($stmt->fetchColumn() ?: '');
 
         $id = self::generateUuid();
         $stmt = $pdo->prepare("
-            INSERT INTO notifications (id, user_id, actor_id, type, title, body, target_type, target_id)
-            VALUES (?, ?, ?, 'like', ?, ?, 'post', ?)
+            INSERT INTO notifications (id, user_id, actor_id, type, title, target_type, target_id)
+            VALUES (?, ?, ?, 'like', ?, 'post', ?)
         ");
         $stmt->execute([
             $id,
             $ownerId,
             $actorId,
             $actorName . ' liked your post',
-            self::truncate($postDescription),
             $postId,
         ]);
 
@@ -123,10 +106,9 @@ class NotificationModel
      * @param  string $commentId UUID komen yang baru dibuat
      * @param  string $ownerId   UUID pemilik post (penerima notifikasi)
      * @param  string $actorId   UUID user yang berkomentar
-     * @param  string $content   Isi komen (dipakai sebagai body, dipotong)
      * @return array<string, mixed>|null Baris notifikasi baru, atau null
      */
-    public static function createCommentNotification(string $postId, string $commentId, string $ownerId, string $actorId, string $content): ?array
+    public static function createCommentNotification(string $postId, string $commentId, string $ownerId, string $actorId): ?array
     {
         if ($actorId === $ownerId) {
             return null;
@@ -140,15 +122,14 @@ class NotificationModel
 
         $id = self::generateUuid();
         $stmt = $pdo->prepare("
-            INSERT INTO notifications (id, user_id, actor_id, type, title, body, target_type, target_id)
-            VALUES (?, ?, ?, 'comment', ?, ?, 'comment', ?)
+            INSERT INTO notifications (id, user_id, actor_id, type, title, target_type, target_id)
+            VALUES (?, ?, ?, 'comment', ?, 'comment', ?)
         ");
         $stmt->execute([
             $id,
             $ownerId,
             $actorId,
             $actorName . ' commented on your post',
-            self::truncate($content),
             $commentId,
         ]);
 
@@ -175,10 +156,9 @@ class NotificationModel
      * @param  string $commentId UUID komen yang di-like
      * @param  string $authorId  UUID penulis komen (penerima notifikasi)
      * @param  string $actorId   UUID user yang me-like komen
-     * @param  string $content   Isi komen (dipakai sebagai body, dipotong)
      * @return array<string, mixed>|null Baris notifikasi baru / yang sudah ada, atau null
      */
-    public static function createCommentLikeNotification(string $commentId, string $authorId, string $actorId, string $content): ?array
+    public static function createCommentLikeNotification(string $commentId, string $authorId, string $actorId): ?array
     {
         if ($actorId === $authorId) {
             return null;
@@ -200,15 +180,14 @@ class NotificationModel
 
         $id = self::generateUuid();
         $stmt = $pdo->prepare("
-            INSERT INTO notifications (id, user_id, actor_id, type, title, body, target_type, target_id)
-            VALUES (?, ?, ?, 'comment_like', ?, ?, 'comment', ?)
+            INSERT INTO notifications (id, user_id, actor_id, type, title, target_type, target_id)
+            VALUES (?, ?, ?, 'comment_like', ?, 'comment', ?)
         ");
         $stmt->execute([
             $id,
             $authorId,
             $actorId,
             $actorName . ' liked your comment',
-            self::truncate($content),
             $commentId,
         ]);
 
@@ -248,8 +227,8 @@ class NotificationModel
      * bentuk API yang dipakai GET /api/notifications — dipakai juga
      * untuk payload push realtime supaya bentuknya sama persis.
      *
-     * @param  array<string, mixed> $row Baris hasil query JOIN (punya actor_username, actor_photo, post_id, post_description)
-     * @return array<string, mixed> Bentuk API: {id, type, title, body, is_read, created_at, actor, postId, postDescription, link}
+     * @param  array<string, mixed> $row Baris hasil query JOIN (punya actor_username, actor_photo, post_id)
+     * @return array<string, mixed> Bentuk API: {id, type, title, is_read, created_at, actor, postId, link}
      */
     public static function toApiRow(array $row): array
     {
@@ -258,7 +237,6 @@ class NotificationModel
             'id' => $row['id'],
             'type' => $row['type'],
             'title' => $row['title'],
-            'body' => $row['body'],
             'is_read' => (bool)$row['is_read'],
             'created_at' => $row['created_at'],
             'actor' => [
@@ -267,7 +245,6 @@ class NotificationModel
                 'photo' => $row['actor_photo'] ?? null,
             ],
             'postId' => $postId,
-            'postDescription' => $row['post_description'] ?? null,
             'link' => $postId ? '/dashboard/' . $postId : null,
         ];
     }
@@ -284,17 +261,15 @@ class NotificationModel
         $pdo = getDB();
         $stmt = $pdo->prepare("
             SELECT
-                n.id, n.type, n.title, n.body, n.is_read, n.created_at,
+                n.id, n.type, n.title, n.is_read, n.created_at,
                 n.actor_id, n.target_id,
                 a.username AS actor_username,
                 pr.photo_profile_url AS actor_photo,
-                CASE WHEN n.type = 'like' THEN n.target_id ELSE c.post_id END AS post_id,
-                p.description AS post_description
+                CASE WHEN n.type = 'like' THEN n.target_id ELSE c.post_id END AS post_id
             FROM notifications n
             LEFT JOIN users a ON a.id = n.actor_id
             LEFT JOIN profiles pr ON pr.user_id = n.actor_id
             LEFT JOIN comments c ON c.id = n.target_id AND n.type IN ('comment', 'comment_like')
-            LEFT JOIN public_posts p ON p.id = CASE WHEN n.type = 'like' THEN n.target_id ELSE c.post_id END
             WHERE n.id = ?
             LIMIT 1
         ");
@@ -335,7 +310,7 @@ class NotificationModel
 
     /**
      * Ambil notifikasi milik user, terbaru dulu, beserta nama + foto
-     * actor dan id + deskripsi post yang dituju (untuk type 'like' postId =
+     * actor dan id post yang dituju (untuk type 'like' postId =
      * target_id; untuk type 'comment' postId diambil dari tabel comments).
      *
      * @param  string $userId UUID penerima notifikasi
@@ -347,17 +322,15 @@ class NotificationModel
         $pdo = getDB();
         $stmt = $pdo->prepare("
             SELECT
-                n.id, n.type, n.title, n.body, n.is_read, n.created_at,
+                n.id, n.type, n.title, n.is_read, n.created_at,
                 n.actor_id, n.target_id,
                 a.username AS actor_username,
                 pr.photo_profile_url AS actor_photo,
-                CASE WHEN n.type = 'like' THEN n.target_id ELSE c.post_id END AS post_id,
-                p.description AS post_description
+                CASE WHEN n.type = 'like' THEN n.target_id ELSE c.post_id END AS post_id
             FROM notifications n
             LEFT JOIN users a ON a.id = n.actor_id
             LEFT JOIN profiles pr ON pr.user_id = n.actor_id
             LEFT JOIN comments c ON c.id = n.target_id AND n.type IN ('comment', 'comment_like')
-            LEFT JOIN public_posts p ON p.id = CASE WHEN n.type = 'like' THEN n.target_id ELSE c.post_id END
             WHERE n.user_id = ?
             ORDER BY n.created_at DESC
             LIMIT ?
