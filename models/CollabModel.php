@@ -304,10 +304,25 @@ class CollabModel
 
         $collabs = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
 
+        return self::hydrateList($collabs);
+    }
+
+    /**
+     * Melengkapi baris collaboration mentah (hasil SELECT utama + owner)
+     * dengan skills, jumlah anggota, dan shape response list.
+     * Dipakai bersama oleh getAll() dan getPage() supaya keduanya
+     * mengembalikan item yang identik.
+     *
+     * @param  array<int, array<string, mixed>> $collabs Baris mentah
+     * @return array<int, array<string, mixed>>
+     */
+    private static function hydrateList(array $collabs): array
+    {
         if (empty($collabs)) {
             return [];
         }
 
+        $pdo = getDB();
         $collabIds = array_column($collabs, 'id');
         $placeholders = implode(',', array_fill(0, count($collabIds), '?'));
 
@@ -395,6 +410,90 @@ class CollabModel
         }
 
         return $result;
+    }
+
+    /**
+     * Satu halaman list collaboration untuk GET /api/collab (audit P2-12).
+     * Mendukung pencarian (LIKE case-insensitive di title/description —
+     * collation MySQL default sudah case-insensitive) dan sort:
+     * newest = created_at DESC (default), oldest = created_at ASC,
+     * due = due_date ASC dengan null terakhir, tiebreak created_at DESC.
+     *
+     * Page/limit diasumsikan sudah divalidasi (clamp) oleh controller.
+     *
+     * @return array{data: array<int, array<string, mixed>>, pagination: array{page: int, limit: int, total: int, total_pages: int}}
+     */
+    public static function getPage(string $q, string $sort, int $page, int $limit): array
+    {
+        $pdo = getDB();
+
+        $where = 'WHERE c.deleted_at IS NULL';
+        $params = [];
+
+        $q = trim($q);
+        if ($q !== '') {
+            // Escape karakter wildcard LIKE supaya query user diperlakukan harfiah.
+            $escaped = str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $q);
+            $where .= ' AND (c.title LIKE ? OR c.description LIKE ?)';
+            $like = '%' . $escaped . '%';
+            $params[] = $like;
+            $params[] = $like;
+        }
+
+        $orderBy = match ($sort) {
+            'oldest' => 'ORDER BY c.created_at ASC',
+            'due' => 'ORDER BY c.due_date IS NULL ASC, c.due_date ASC, c.created_at DESC',
+            default => 'ORDER BY c.created_at DESC',
+        };
+
+        // Total baris (untuk pagination meta) — WHERE sama, tanpa LIMIT.
+        $countStmt = $pdo->prepare("
+            SELECT COUNT(*)
+            FROM collaborations c
+            $where
+        ");
+        $countStmt->execute($params);
+        $total = (int) $countStmt->fetchColumn();
+        $totalPages = $total === 0 ? 0 : (int) ceil($total / $limit);
+
+        $offset = ($page - 1) * $limit;
+        $listStmt = $pdo->prepare("
+            SELECT
+                c.id,
+                c.user_id,
+                c.title,
+                c.description,
+                c.type,
+                c.due_date,
+                c.required_member,
+                c.status,
+                c.created_at,
+                u.username,
+                pr.photo_profile_url
+            FROM collaborations c
+            LEFT JOIN users u
+                ON c.user_id = u.id
+            LEFT JOIN profiles pr
+                ON c.user_id = pr.user_id
+            $where
+            $orderBy
+            LIMIT ? OFFSET ?
+        ");
+        // LIMIT/OFFSET ikut di-execute sebagai int (pola yang sama dengan
+        // NotificationModel::getForUser) — native prepares PDO mengikatnya
+        // sebagai integer.
+        $listStmt->execute(array_merge($params, [$limit, $offset]));
+        $collabs = $listStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        return [
+            'data' => self::hydrateList($collabs),
+            'pagination' => [
+                'page' => $page,
+                'limit' => $limit,
+                'total' => $total,
+                'total_pages' => $totalPages,
+            ],
+        ];
     }
 
     /**

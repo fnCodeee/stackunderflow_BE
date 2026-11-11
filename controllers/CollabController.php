@@ -161,7 +161,20 @@ class CollabController
 
     /**
      * Handler untuk GET /api/collab
-     * Mengambil semua postingan kolaborasi beserta info pemilik, media, skills, dan circle.
+     * List postingan kolaborasi dengan pagination + search + sort (audit P2-12).
+     *
+     * Query params:
+     *  - page  (default 1): halaman yang diminta.
+     *  - limit (default 12): item per halaman.
+     *  - q     (default ''): cari di title/description (LIKE case-insensitive).
+     *  - sort  (default newest): newest | oldest | due.
+     *
+     * Validasi page/limit memakai CLAMP, bukan 400: nilai di luar rentang
+     * dijepit (page < 1 → 1, limit < 1 → 1, limit > 50 → 50; bukan angka →
+     * default). List endpoint bersifat read-only — parameter jelek tidak
+     * boleh membuat seluruh halaman gagal. Sort di luar daftar → newest.
+     * Response mempertahankan envelope {success, message, data} dan
+     * menambah `pagination: {page, limit, total, total_pages}`.
      *
      * @param  array<string, string> $params Path parameters dari Router
      * @return void
@@ -170,8 +183,30 @@ class CollabController
     {
         try {
             // Public listing: readable without a token (OptionalAuth).
-            $collabs = CollabModel::getAll();
-            Response::json($collabs, 200, 'Get All Posts Collaboration!', true);
+            $pageRaw = $_GET['page'] ?? null;
+            $limitRaw = $_GET['limit'] ?? null;
+            $page = $pageRaw !== null && filter_var($pageRaw, FILTER_VALIDATE_INT) !== false
+                ? max(1, (int) $pageRaw)
+                : 1;
+            $limit = $limitRaw !== null && filter_var($limitRaw, FILTER_VALIDATE_INT) !== false
+                ? min(50, max(1, (int) $limitRaw))
+                : 12;
+
+            $q = trim((string) ($_GET['q'] ?? ''));
+
+            $sort = (string) ($_GET['sort'] ?? 'newest');
+            if (!in_array($sort, ['newest', 'oldest', 'due'], true)) {
+                $sort = 'newest';
+            }
+
+            $pageResult = CollabModel::getPage($q, $sort, $page, $limit);
+            Response::json(
+                $pageResult['data'],
+                200,
+                'Get All Posts Collaboration!',
+                true,
+                $pageResult['pagination']
+            );
         } catch (Throwable $e) {
             error_log('[COLLAB ERROR] ' . $e->getMessage());
             Response::json(null, 500, 'Terjadi kesalahan pada server saat mengambil data kolaborasi', false);
