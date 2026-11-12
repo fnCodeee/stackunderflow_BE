@@ -104,7 +104,15 @@ class InboxController
                 Response::json(null, 404, 'User tidak ditemukan', false);
             }
 
-            $conversationId = InboxModel::ensureDirect($userId, $otherId);
+            // Dari halaman collab, collabId ikut dikirim: kalau
+            // percakapan aplikasi untuk collab itu sudah ada,
+            // percakapan itulah yang dilanjutkan (bukan thread baru).
+            $collabId = trim((string) ($body['collabId'] ?? $body['collab_id'] ?? ''));
+            $conversationId = InboxModel::ensureChat(
+                $userId,
+                $otherId,
+                $collabId !== '' ? $collabId : null
+            );
             Response::json(
                 InboxModel::summaryFor($conversationId, $userId),
                 200,

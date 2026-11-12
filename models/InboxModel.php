@@ -80,6 +80,42 @@ class InboxModel
         return $id;
     }
 
+    /** ID percakapan aplikasi untuk satu collab antara dua user, atau null. */
+    public static function findCollabConversation(PDO $pdo, string $collabId, string $a, string $b): ?string
+    {
+        $stmt = $pdo->prepare("
+            SELECT c.id
+            FROM dm_conversations c
+            JOIN collaboration_applications a ON a.id = c.application_id
+            JOIN dm_participants p1 ON p1.conversation_id = c.id AND p1.user_id = :a
+            JOIN dm_participants p2 ON p2.conversation_id = c.id AND p2.user_id = :b
+            WHERE a.collab_id = :collab
+            LIMIT 1
+        ");
+        $stmt->execute([':collab' => $collabId, ':a' => $a, ':b' => $b]);
+        $id = $stmt->fetchColumn();
+        return $id === false ? null : (string) $id;
+    }
+
+    /**
+     * Target tombol Chat dari halaman collab: kalau sudah ada
+     * percakapan aplikasi untuk collab ini dengan user tersebut,
+     * lanjutkan percakapan itu — jangan buat thread direct kedua
+     * untuk orang + project yang sama. Belum ada -> direct biasa.
+     */
+    public static function ensureChat(string $me, string $other, ?string $collabId): string
+    {
+        $pdo = getDB();
+        if ($collabId !== null && $collabId !== '') {
+            $existing = self::findCollabConversation($pdo, $collabId, $me, $other);
+            if ($existing !== null) {
+                self::restoreFor($pdo, $existing, $me, false);
+                return $existing;
+            }
+        }
+        return self::ensureDirect($me, $other);
+    }
+
     /** Find-or-create percakapan direct; thread yang ter-hidden dihidupkan lagi untuk pemanggil. */
     public static function ensureDirect(string $me, string $other): string
     {
