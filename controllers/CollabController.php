@@ -895,6 +895,15 @@ class CollabController
                 Response::json(null, 403, 'Bukan hak lu buat hapus collab ini!', false);
             }
 
+            // Hapus hanya boleh selama belum ada yang gabung: baris
+            // user_collaboration isinya owner saja (count <= 1). Kalau
+            // sudah ada anggota lain yang diterima, tolak.
+            $memberStmt = getDB()->prepare("SELECT COUNT(*) FROM user_collaboration WHERE collaboration_id = :id");
+            $memberStmt->execute([':id' => $collabId]);
+            if ((int)$memberStmt->fetchColumn() > 1) {
+                Response::json(null, 409, 'Kolaborasi sudah memiliki anggota, tidak dapat dihapus!', false);
+            }
+
             // Soft delete kolaborasi (deleted_at = NOW()). Child tables
             // (collab_media, collab_skills, circle, applications, user_collaboration)
             // TIDAK dihapus — tidak ada CASCADE di sini.

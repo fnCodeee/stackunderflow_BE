@@ -227,11 +227,10 @@ class PostController
             $mediaUrls      = $body['media_urls'] ?? $body['mediaUrls'] ?? null;
             $mediaPublicIds = $body['media_public_ids'] ?? $body['mediaPublicIds'] ?? [];
 
-            // Validasi field wajib sesuai Express baseline (description, externalUrl required)
-            if (
-                $description === '' ||
-                $externalUrlRaw === null || trim((string)$externalUrlRaw) === ''
-            ) {
+            // Yang wajib hanya description — itu satu-satunya field
+            // yang diedit dari aplikasi. externalUrl opsional: kalau
+            // tidak dikirim, nilai lama dipertahankan (lihat di bawah).
+            if ($description === '') {
                 Response::json(null, 400, 'Tiap kolom wajib di isi!', false);
             }
 
@@ -240,11 +239,11 @@ class PostController
                 Response::json(null, 400, 'Count of mediaUrls and mediaPublicIds must be same!', false);
             }
 
-            $externalUrl = trim((string)$externalUrlRaw);
+            $externalUrl = $externalUrlRaw === null ? null : trim((string)$externalUrlRaw);
 
             // 1. Cek ownership dulu (mirip Express: findById lalu compare userId)
             $pdo = getDB();
-            $checkStmt = $pdo->prepare("SELECT user_id FROM public_posts WHERE id = :id AND deleted_at IS NULL LIMIT 1");
+            $checkStmt = $pdo->prepare("SELECT user_id, external_url, portfolio_type FROM public_posts WHERE id = :id AND deleted_at IS NULL LIMIT 1");
             $checkStmt->execute([':id' => $postId]);
             $existing = $checkStmt->fetch();
 
@@ -257,11 +256,21 @@ class PostController
                 Response::json(null, 403, 'Bukan hak lu buat edit postingan ini!', false);
             }
 
+            // external_url / portfolio_type yang tidak dikirim berarti
+            // "pertahankan nilai lama" — aplikasi hanya mengirim
+            // description saat mengedit.
+            if ($externalUrl === null) {
+                $externalUrl = (string)($existing['external_url'] ?? '');
+            }
+            $portfolioTypeFinal = (isset($body['portfolio_type']) || isset($body['portfolioType']))
+                ? (in_array($portfolioType, ['link', 'images'], true) ? $portfolioType : 'link')
+                : (string)($existing['portfolio_type'] ?? 'link');
+
             // 2. Update via model
             $result = PostModel::update($postId, [
                 'description'      => $description,
                 'external_url'     => $externalUrl,
-                'portfolio_type'   => in_array($portfolioType, ['link', 'images'], true) ? $portfolioType : 'link',
+                'portfolio_type'   => $portfolioTypeFinal,
                 'media_urls'       => is_array($mediaUrls) ? array_values($mediaUrls) : null,
                 'media_public_ids' => is_array($mediaPublicIds) ? array_values($mediaPublicIds) : [],
             ]);
