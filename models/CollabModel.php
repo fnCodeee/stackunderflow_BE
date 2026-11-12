@@ -226,9 +226,7 @@ class CollabModel
         $mediaPublicIds = [];
         foreach ($mediaRows as $m) {
             $mediaUrls[] = $m['media_url'];
-            if ($m['media_public_id'] !== null) {
-                $mediaPublicIds[] = $m['media_public_id'];
-            }
+            $mediaPublicIds[] = $m['media_public_id'];
         }
 
         // 3. Ambil skills yang berelasi
@@ -604,6 +602,23 @@ class CollabModel
             ];
         }
 
+        // Media per collab (untuk grid foto di detail
+        // My Collaborations) — satu query batch, urut waktu
+        // upload. media_public_ids selalu sejajar indeks
+        // dengan media_urls (null dipertahankan).
+        $mediaStmt = $pdo->prepare("
+            SELECT collab_id, media_url, media_public_id
+            FROM collab_media
+            WHERE collab_id IN ($placeholders)
+            ORDER BY created_at ASC
+        ");
+        $mediaStmt->execute($collabIds);
+        $mediaMap = [];
+        foreach ($mediaStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $mediaMap[$row['collab_id']]['urls'][] = $row['media_url'];
+            $mediaMap[$row['collab_id']]['public_ids'][] = $row['media_public_id'];
+        }
+
         $result = [];
         foreach ($collabs as $collab) {
             $cid = $collab['id'];
@@ -621,6 +636,8 @@ class CollabModel
                 'accepted_member_count' => $acceptedMemberCount,
                 'available_slots' => max(0, $requiredMember - $acceptedMemberCount),
                 'skills_needed' => $skillsMap[$cid] ?? [],
+                'media_urls' => $mediaMap[$cid]['urls'] ?? [],
+                'media_public_ids' => $mediaMap[$cid]['public_ids'] ?? [],
                 'members' => $membersMap[$cid] ?? [],
                 'owner' => [
                     'id' => $collab['user_id'],
