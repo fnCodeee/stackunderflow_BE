@@ -87,6 +87,77 @@ class NotificationModel
     }
 
     /**
+     * Buat notifikasi aplikasi (lamaran collab) untuk pemilik project.
+     * Null kalau actor == pemilik. Dedupe per actor+collab: lamaran
+     * ulang (setelah ditolak / di-withdraw) menyegarkan notifikasi
+     * yang sama menjadi belum-dibaca + paling baru, bukan duplikat.
+     *
+     * @param  string $collabId UUID collab yang dilamar
+     * @param  string $ownerId  UUID pemilik project (penerima)
+     * @param  string $actorId  UUID pelamar
+     * @return array<string, mixed>|null Baris notifikasi, atau null
+     */
+    public static function createApplicationNotification(string $collabId, string $ownerId, string $actorId): ?array
+    {
+        if ($actorId === $ownerId) {
+            return null;
+        }
+
+        $pdo = getDB();
+
+        $stmt = $pdo->prepare("SELECT * FROM notifications WHERE actor_id = ? AND target_id = ? AND type = 'application' LIMIT 1");
+        $stmt->execute([$actorId, $collabId]);
+        $existing = $stmt->fetch();
+        if ($existing) {
+            $pdo->prepare("UPDATE notifications SET is_read = 0, created_at = CURRENT_TIMESTAMP WHERE id = ?")
+                ->execute([$existing['id']]);
+            return self::findById($existing['id']);
+        }
+
+        $stmt = $pdo->prepare('SELECT username FROM users WHERE id = ? LIMIT 1');
+        $stmt->execute([$actorId]);
+        $actorName = (string)($stmt->fetchColumn() ?: 'Someone');
+
+        $id = self::generateUuid();
+        $stmt = $pdo->prepare("
+            INSERT INTO notifications (id, user_id, actor_id, type, title, target_type, target_id)
+            VALUES (?, ?, ?, 'application', ?, 'collaboration', ?)
+        ");
+        $stmt->execute([
+            $id,
+            $ownerId,
+            $actorId,
+            $actorName . ' applied to your project',
+            $collabId,
+        ]);
+
+        return self::findById($id);
+    }
+
+    /**
+     * Cari notifikasi aplikasi milik actor untuk sebuah collab
+     * (id + penerima) — untuk push penghapusan saat withdraw.
+     *
+     * @return array{id: string, user_id: string}|null
+     */
+    public static function findApplicationNotification(string $collabId, string $actorId): ?array
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare("SELECT id, user_id FROM notifications WHERE actor_id = ? AND target_id = ? AND type = 'application' LIMIT 1");
+        $stmt->execute([$actorId, $collabId]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    /** Hapus notifikasi aplikasi milik actor untuk sebuah collab. */
+    public static function deleteApplicationNotification(string $collabId, string $actorId): void
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare("DELETE FROM notifications WHERE actor_id = ? AND target_id = ? AND type = 'application'");
+        $stmt->execute([$actorId, $collabId]);
+    }
+
+    /**
      * Hapus notifikasi like milik actor untuk sebuah post (dipanggil saat
      * like dibatalkan). Tidak ada baris yang cocok = tidak ada efek.
      */
@@ -245,7 +316,10 @@ class NotificationModel
                 'photo' => $row['actor_photo'] ?? null,
             ],
             'postId' => $postId,
-            'link' => $postId ? '/dashboard/' . $postId : null,
+            'collabId' => $row['type'] === 'application' ? ($row['target_id'] ?? null) : null,
+            'link' => $postId
+                ? '/dashboard/' . $postId
+                : ($row['type'] === 'application' ? '/inbox' : null),
         ];
     }
 

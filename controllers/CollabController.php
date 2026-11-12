@@ -14,6 +14,7 @@ declare(strict_types=1);
 
 require_once BASE_PATH . '/models/CollabModel.php';
 require_once BASE_PATH . '/models/InboxModel.php';
+require_once BASE_PATH . '/models/NotificationModel.php';
 require_once BASE_PATH . '/models/SkillModel.php';
 require_once BASE_PATH . '/utils/Response.php';
 
@@ -684,6 +685,25 @@ class CollabController
                 } catch (Throwable $inboxError) {
                     error_log('[INBOX APPLY HOOK] ' . $inboxError->getMessage());
                 }
+
+                // Notifikasi lonceng untuk pemilik project — pola yang
+                // sama seperti notifikasi like: best-effort, kegagalan
+                // di sini tidak boleh menggagalkan apply-nya sendiri.
+                try {
+                    $notifRow = NotificationModel::createApplicationNotification(
+                        (string)$locked['id'],
+                        (string)$locked['user_id'],
+                        (string)$userId
+                    );
+                    if ($notifRow) {
+                        $apiRow = NotificationModel::findApiRow($notifRow['id']);
+                        if ($apiRow) {
+                            Realtime::publishNotification((string)$locked['user_id'], $apiRow);
+                        }
+                    }
+                } catch (Throwable $notifError) {
+                    error_log('[APPLY NOTIFICATION] ' . $notifError->getMessage());
+                }
             } catch (Throwable $e) {
                 if ($pdo->inTransaction()) {
                     $pdo->rollBack();
@@ -1004,6 +1024,18 @@ class CollabController
                 $ownerId = $ownerStmt->fetchColumn();
                 if ($ownerId !== false) {
                     self::publishApplicationDecisionTo((string)$application['id'], (string)$ownerId);
+
+                    // Lamaran ditarik -> notifikasi aplikasinya ikut
+                    // hilang dari lonceng pemilik (pola unlike).
+                    try {
+                        $notifRow = NotificationModel::findApplicationNotification($collabId, (string)$userId);
+                        NotificationModel::deleteApplicationNotification($collabId, (string)$userId);
+                        if ($notifRow) {
+                            Realtime::publishNotificationRemoved((string)$ownerId, $notifRow['id']);
+                        }
+                    } catch (Throwable $notifError) {
+                        error_log('[WITHDRAW NOTIFICATION] ' . $notifError->getMessage());
+                    }
                 }
             }
 
