@@ -106,6 +106,17 @@ class SkillModel
         ];
     }
 
+    /** Jumlah skill pribadi milik seorang user (untuk batas SkillGuard). */
+    public static function countPrivateForUser(string $userId): int
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare(
+            "SELECT COUNT(*) FROM skills WHERE scope = 'private' AND created_by = :user_id"
+        );
+        $stmt->execute([':user_id' => $userId]);
+        return (int)$stmt->fetchColumn();
+    }
+
     /**
      * Mencari skill berdasarkan ID.
      *
