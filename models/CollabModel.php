@@ -585,7 +585,7 @@ class CollabModel
         // detail) — satu query untuk semua collab, dikelompokkan per
         // collaboration_id, urut waktu gabung.
         $memberListStmt = $pdo->prepare("
-            SELECT uc.collaboration_id, u.id, u.username, pr.photo_profile_url
+            SELECT uc.collaboration_id, u.id, u.username, pr.photo_profile_url, uc.status AS work_status
             FROM user_collaboration uc
             JOIN users u ON u.id = uc.user_id
             LEFT JOIN profiles pr ON pr.user_id = u.id
@@ -598,6 +598,7 @@ class CollabModel
             $membersMap[$row['collaboration_id']][] = [
                 'id' => $row['id'],
                 'username' => $row['username'] ?? '',
+                'work_status' => $row['work_status'] ?? 'not-started',
                 'photo_profile_url' => $row['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
             ];
         }
@@ -1083,6 +1084,54 @@ class CollabModel
         $stmt->execute([':id' => $id]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         return $row ?: null;
+    }
+
+    /**
+     * Owner menandai proyek selesai: status publik -> completed
+     * dan SELURUH baris member -> 'complete' (board tiap member
+     * memindahkan kartunya ke kolom Complete). Dipanggil di dalam
+     * transaksi milik controller.
+     */
+    public static function completeProject(PDO $pdo, string $collabId): void
+    {
+        $stmt = $pdo->prepare("UPDATE collaborations SET status = 'completed' WHERE id = ?");
+        $stmt->execute([$collabId]);
+        $stmt = $pdo->prepare("UPDATE user_collaboration SET status = 'complete' WHERE collaboration_id = ?");
+        $stmt->execute([$collabId]);
+    }
+
+    /**
+     * Kebalikan completeProject: status publik -> in-progress dan
+     * baris member yang 'complete' kembali ke 'not-started'.
+     * Baris 'revise' tidak disentuh (masih menunggu pengerjaan ulang).
+     */
+    public static function reopenProject(PDO $pdo, string $collabId): void
+    {
+        $stmt = $pdo->prepare("UPDATE collaborations SET status = 'in-progress' WHERE id = ?");
+        $stmt->execute([$collabId]);
+        $stmt = $pdo->prepare("UPDATE user_collaboration SET status = 'not-started' WHERE collaboration_id = ? AND status = 'complete'");
+        $stmt->execute([$collabId]);
+    }
+
+    /**
+     * Owner mengatur status kerja satu member. False jika user
+     * tersebut bukan member (tidak ada baris user_collaboration).
+     * Member yang ditandai belum selesai pada proyek berstatus
+     * completed membuka lagi proyeknya: status publik tidak boleh
+     * tetap 'completed' saat ada member di Active/Revise.
+     */
+    public static function setMemberWorkStatus(PDO $pdo, string $collabId, string $memberId, string $status): bool
+    {
+        $stmt = $pdo->prepare("UPDATE user_collaboration SET status = ? WHERE collaboration_id = ? AND user_id = ?");
+        $stmt->execute([$status, $collabId, $memberId]);
+        if ($stmt->rowCount() === 0) {
+            return false;
+        }
+        if ($status !== 'complete') {
+            $fix = $pdo->prepare("UPDATE collaborations SET status = 'in-progress' WHERE id = ? AND status = 'completed'");
+            $fix->execute([$collabId]);
+        }
+        return true;
     }
 
     /**

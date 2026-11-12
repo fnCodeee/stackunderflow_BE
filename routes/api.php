@@ -152,6 +152,13 @@ $router->put('/api/collab/:id/applications/:applicationId/accept', [AuthMiddlewa
 $router->put('/api/collab/:id/applications/:applicationId/decline', [AuthMiddleware::class, 'handle'], [CollabController::class, 'declineApplication']);
 $router->delete('/api/collab/:id/apply', [AuthMiddleware::class, 'handle'], [CollabController::class, 'withdrawApplication']);
 
+// Project progress (2026-11-12): owner menandai proyek complete /
+// membukanya lagi, dan mengatur status kerja tiap member
+// (user_collaboration.status yang jadi dasar kolom board).
+$router->post('/api/collab/:id/complete', [AuthMiddleware::class, 'handle'], [CollabController::class, 'completeProject']);
+$router->post('/api/collab/:id/reopen', [AuthMiddleware::class, 'handle'], [CollabController::class, 'reopenProject']);
+$router->put('/api/collab/:id/members/:userId/status', [AuthMiddleware::class, 'handle'], [CollabController::class, 'setMemberWorkStatus']);
+
 // ── SKILLS MODULE ─────────────────────────────────────────────────────────────
 // GET /api/skills: skill system + private skill milik user yang sedang login
 $router->get('/api/skills', [AuthMiddleware::class, 'handle'], [SkillController::class, 'getSkills']);

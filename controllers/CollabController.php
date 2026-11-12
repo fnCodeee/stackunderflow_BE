@@ -867,6 +867,148 @@ class CollabController
     }
 
     /**
+     * Handler untuk POST /api/collab/:id/complete
+     * Owner menandai proyek selesai (lihat CollabModel::completeProject).
+     */
+    public static function completeProject(array $params = []): void
+    {
+        self::changeProjectProgress($params, true);
+    }
+
+    /**
+     * Handler untuk POST /api/collab/:id/reopen
+     * Owner membuka lagi proyek yang sudah complete.
+     */
+    public static function reopenProject(array $params = []): void
+    {
+        self::changeProjectProgress($params, false);
+    }
+
+    private static function changeProjectProgress(array $params, bool $complete): void
+    {
+        $pdo = getDB();
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $collabId = $params['id'] ?? '';
+            if ($collabId === '') {
+                Response::json(null, 404, 'Collaboration not found', false);
+            }
+
+            $pdo->beginTransaction();
+            try {
+                $locked = CollabModel::lockCollabForMembership($pdo, $collabId);
+                if (!$locked) {
+                    $pdo->rollBack();
+                    Response::json(null, 404, 'Collaboration not found', false);
+                }
+
+                if ((string)$locked['user_id'] !== (string)$userId) {
+                    $pdo->rollBack();
+                    Response::json(null, 403, 'Only the owner can change project progress', false);
+                }
+
+                if ($complete) {
+                    CollabModel::completeProject($pdo, $collabId);
+                } else {
+                    CollabModel::reopenProject($pdo, $collabId);
+                }
+                $pdo->commit();
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                throw $e;
+            }
+
+            Response::json(
+                ['id' => $collabId, 'status' => $complete ? 'completed' : 'in-progress'],
+                200,
+                $complete ? 'Project marked complete' : 'Project reopened'
+            );
+        } catch (Throwable $e) {
+            error_log('[COLLAB PROGRESS ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server', false);
+        }
+    }
+
+    /**
+     * Handler untuk PUT /api/collab/:id/members/:userId/status
+     * Owner mengatur status kerja satu member:
+     * {status: 'not-started' | 'complete' | 'revise'}.
+     *
+     * - 401 belum login, 404 collab/member tidak ada
+     * - 403 bukan owner, 400 status di luar enum
+     */
+    public static function setMemberWorkStatus(array $params = []): void
+    {
+        $pdo = getDB();
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $collabId = $params['id'] ?? '';
+            $memberId = $params['userId'] ?? '';
+            if ($collabId === '' || $memberId === '') {
+                Response::json(null, 404, 'Member not found', false);
+            }
+
+            $body = $GLOBALS['body'] ?? [];
+            if (empty($body)) {
+                $raw = file_get_contents('php://input');
+                if ($raw) {
+                    $decoded = json_decode($raw, true);
+                    if (is_array($decoded)) {
+                        $body = $decoded;
+                    }
+                }
+            }
+            $status = trim((string)($body['status'] ?? ''));
+            if (!in_array($status, ['not-started', 'complete', 'revise'], true)) {
+                Response::json(null, 400, 'Status tidak valid. Status harus not-started, complete, atau revise', false);
+            }
+
+            $pdo->beginTransaction();
+            try {
+                $locked = CollabModel::lockCollabForMembership($pdo, $collabId);
+                if (!$locked) {
+                    $pdo->rollBack();
+                    Response::json(null, 404, 'Collaboration not found', false);
+                }
+
+                if ((string)$locked['user_id'] !== (string)$userId) {
+                    $pdo->rollBack();
+                    Response::json(null, 403, 'Only the owner can set member status', false);
+                }
+
+                $ok = CollabModel::setMemberWorkStatus($pdo, $collabId, $memberId, $status);
+                if (!$ok) {
+                    $pdo->rollBack();
+                    Response::json(null, 404, 'Member not found', false);
+                }
+                $pdo->commit();
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                throw $e;
+            }
+
+            Response::json(['user_id' => $memberId, 'status' => $status], 200, 'Member status updated');
+        } catch (Throwable $e) {
+            error_log('[COLLAB PROGRESS ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server', false);
+        }
+    }
+
+    /**
      * Handler untuk PUT /api/collab/:id/applications/:applicationId/decline
      * Owner menolak lamaran: aplikasi -> rejected (diekspos 'declined').
      * Pelamar boleh apply ulang sesudahnya (apply membuka lagi barisnya).
