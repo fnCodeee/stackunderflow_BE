@@ -276,7 +276,7 @@ CREATE TABLE IF NOT EXISTS collaboration_applications (
     user_id VARCHAR(36) NOT NULL,
     collab_id VARCHAR(36) NOT NULL,
     message TEXT NULL,
-    status ENUM('pending', 'accepted', 'rejected') NOT NULL DEFAULT 'pending',
+    status ENUM('pending', 'accepted', 'rejected', 'withdrawn') NOT NULL DEFAULT 'pending',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
@@ -401,16 +401,22 @@ CREATE TABLE IF NOT EXISTS notifications (
 
 CREATE TABLE IF NOT EXISTS dm_conversations (
     id VARCHAR(36) NOT NULL DEFAULT (UUID()),
+    application_id VARCHAR(36) NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
-    PRIMARY KEY (id)
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_dm_conversations_application (application_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS dm_participants (
     id VARCHAR(36) NOT NULL DEFAULT (UUID()),
     conversation_id VARCHAR(36) NOT NULL,
     user_id VARCHAR(36) NOT NULL,
+    is_muted TINYINT(1) NOT NULL DEFAULT 0,
+    is_pinned TINYINT(1) NOT NULL DEFAULT 0,
+    cleared_at TIMESTAMP NULL DEFAULT NULL,
+    hidden_at TIMESTAMP NULL DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (id),

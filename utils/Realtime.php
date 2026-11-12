@@ -125,4 +125,39 @@ class Realtime
             'payload' => ['likes' => $likes],
         ]);
     }
+
+    /**
+     * Push satu pesan inbox baru ke lawan bicara — thread-nya naik
+     * dan pesannya muncul live tanpa menunggu polling.
+     *
+     * @param  string $userId        UUID penerima (lawan bicara)
+     * @param  string $conversationId UUID percakapan dm
+     * @param  array<string, mixed> $message Pesan bentuk API (InboxModel::insertMessage)
+     * @return void
+     */
+    public static function publishInboxMessage(string $userId, string $conversationId, array $message): void
+    {
+        self::publish([
+            'type' => 'inbox-message',
+            'userId' => $userId,
+            'payload' => ['conversationId' => $conversationId, 'message' => $message],
+        ]);
+    }
+
+    /**
+     * Beritahu satu user bahwa sebuah percakapan berubah tanpa pesan
+     * baru (status aplikasi berubah: diterima / ditolak / ditarik).
+     *
+     * @param  string $userId        UUID user yang diberi tahu
+     * @param  string $conversationId UUID percakapan dm
+     * @return void
+     */
+    public static function publishInboxUpdate(string $userId, string $conversationId): void
+    {
+        self::publish([
+            'type' => 'inbox-update',
+            'userId' => $userId,
+            'payload' => ['conversationId' => $conversationId],
+        ]);
+    }
 }

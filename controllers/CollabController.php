@@ -13,6 +13,7 @@
 declare(strict_types=1);
 
 require_once BASE_PATH . '/models/CollabModel.php';
+require_once BASE_PATH . '/models/InboxModel.php';
 require_once BASE_PATH . '/models/SkillModel.php';
 require_once BASE_PATH . '/utils/Response.php';
 
@@ -655,6 +656,16 @@ class CollabController
                     : CollabModel::createApplication($collabId, (string)$userId, $message);
 
                 $pdo->commit();
+
+                // Inbox: pastikan percakapan aplikasi ada (dibuat
+                // sekali per aplikasi) dan pesan lamaran menjadi
+                // pesan di thread-nya. Best-effort — apply tidak
+                // boleh gagal gara-gara inbox.
+                try {
+                    InboxModel::ensureForApplication($application, (string)$locked['user_id'], (string)$userId, $message);
+                } catch (Throwable $inboxError) {
+                    error_log('[INBOX APPLY HOOK] ' . $inboxError->getMessage());
+                }
             } catch (Throwable $e) {
                 if ($pdo->inTransaction()) {
                     $pdo->rollBack();
@@ -791,6 +802,7 @@ class CollabController
             $fresh = CollabModel::findApplicationById($collabId, $applicationId);
             $acceptedCount = CollabModel::countAcceptedMembers($collabId);
             $availableSlots = max(0, (int)$locked['required_member'] - $acceptedCount);
+            self::publishApplicationDecisionTo($applicationId, isset($application['user_id']) ? (string)$application['user_id'] : null);
             Response::json([
                 'application' => $fresh,
                 'accepted_member_count' => $acceptedCount,
@@ -859,6 +871,7 @@ class CollabController
             }
 
             $fresh = CollabModel::findApplicationById($collabId, $applicationId);
+            self::publishApplicationDecisionTo($applicationId, isset($application['user_id']) ? (string)$application['user_id'] : null);
             Response::json(['application' => $fresh], 200, 'Application declined', true);
         } catch (Throwable $e) {
             error_log('[COLLAB DECLINE ERROR] ' . $e->getMessage());
@@ -912,6 +925,78 @@ class CollabController
             Response::json($collab, 200, 'Postingan kolaborasi berhasil dihapus!', true);
         } catch (Throwable $e) {
             error_log('[COLLAB DELETE ERROR] ' . $e->getMessage());
+            Response::json(null, 500, $e->getMessage(), false);
+        }
+    }
+
+    /**
+     * Beritahu satu user lewat realtime bahwa status sebuah aplikasi
+     * berubah (kartu aplikasi di inbox-nya ikut berubah). Best-effort:
+     * kegagalan publish tidak pernah menggagalkan aksi utamanya.
+     */
+    private static function publishApplicationDecisionTo(string $applicationId, ?string $recipientId): void
+    {
+        try {
+            if ($recipientId === null || $recipientId === '') {
+                return;
+            }
+            $conversationId = InboxModel::findByApplication(getDB(), $applicationId);
+            if ($conversationId !== null) {
+                Realtime::publishInboxUpdate($recipientId, $conversationId);
+            }
+        } catch (Throwable $e) {
+            error_log('[INBOX DECISION PUBLISH] ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Handler untuk DELETE /api/collab/:id/apply
+     * Pelamar menarik lamarannya sendiri (hanya saat masih pending):
+     * status menjadi 'withdrawn' dan pemilik project menerima event
+     * realtime supaya kartu aplikasi di inbox-nya ikut berubah.
+     */
+    public static function withdrawApplication(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $collabId = $params['id'] ?? '';
+            if ($collabId === '') {
+                Response::json(null, 404, 'Collaboration not found', false);
+            }
+
+            $application = CollabModel::findApplication($collabId, (string)$userId);
+            if ($application === null) {
+                Response::json(null, 404, 'Application not found', false);
+            }
+            if (($application['status'] ?? '') !== 'pending') {
+                Response::json(null, 409, 'Application already decided', false);
+            }
+
+            CollabModel::withdrawApplicationRow($collabId, (string)$userId);
+
+            // Beritahu pemilik project: kartu aplikasi berubah status.
+            if (isset($application['id'])) {
+                $ownerStmt = getDB()->prepare("SELECT user_id FROM collaborations WHERE id = :id LIMIT 1");
+                $ownerStmt->execute([':id' => $collabId]);
+                $ownerId = $ownerStmt->fetchColumn();
+                if ($ownerId !== false) {
+                    self::publishApplicationDecisionTo((string)$application['id'], (string)$ownerId);
+                }
+            }
+
+            Response::json(
+                ['application' => CollabModel::findApplication($collabId, (string)$userId)],
+                200,
+                'Application withdrawn',
+                true
+            );
+        } catch (Throwable $e) {
+            error_log('[COLLAB WITHDRAW ERROR] ' . $e->getMessage());
             Response::json(null, 500, $e->getMessage(), false);
         }
     }

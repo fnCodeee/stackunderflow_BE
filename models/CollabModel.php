@@ -1228,6 +1228,22 @@ class CollabModel
     }
 
     /**
+     * Tarik aplikasi pending milik pelamar sendiri: status menjadi
+     * 'withdrawn'. Filter status di WHERE membuat flip ini atomik.
+     *
+     * @param  string $collabId UUID collaboration
+     * @param  string $userId   UUID pelamar
+     * @return bool True jika satu baris berhasil diubah
+     */
+    public static function withdrawApplicationRow(string $collabId, string $userId): bool
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare("UPDATE collaboration_applications SET status = 'withdrawn' WHERE collab_id = :collab_id AND user_id = :user_id AND status = 'pending'");
+        $stmt->execute([':collab_id' => $collabId, ':user_id' => $userId]);
+        return $stmt->rowCount() > 0;
+    }
+
+    /**
      * Ubah aplikasi pending menjadi rejected (diekspos sebagai 'declined').
      * Sama atomiknya dengan acceptApplicationRow.
      *

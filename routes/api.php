@@ -22,6 +22,7 @@ require_once BASE_PATH . '/controllers/SkillController.php';
 require_once BASE_PATH . '/controllers/UserController.php';
 require_once BASE_PATH . '/controllers/UploadController.php';
 require_once BASE_PATH . '/controllers/NotificationController.php';
+require_once BASE_PATH . '/controllers/InboxController.php';
 
 // ── Health Check: GET / ───────────────────────────────────────────────────────
 $router->get('/', function (array $params): void {
@@ -103,6 +104,20 @@ $router->put('/api/notifications/:id/read', [AuthMiddleware::class, 'handle'], [
 // POST /api/notifications/read-all: tandai semua notifikasi dibaca (auth required)
 $router->post('/api/notifications/read-all', [AuthMiddleware::class, 'handle'], [NotificationController::class, 'markAllRead']);
 
+// ── INBOX / DM MODULE ─────────────────────────────────────────────────────────
+// Inbox persisten di atas tabel dm_* (lihat InboxController / InboxModel).
+$router->get('/api/inbox/summary', [AuthMiddleware::class, 'handle'], [InboxController::class, 'summary']);
+$router->get('/api/inbox/conversations', [AuthMiddleware::class, 'handle'], [InboxController::class, 'listConversations']);
+$router->post('/api/inbox/conversations', [AuthMiddleware::class, 'handle'], [InboxController::class, 'createConversation']);
+$router->get('/api/inbox/conversations/:id/messages', [AuthMiddleware::class, 'handle'], [InboxController::class, 'listMessages']);
+$router->post('/api/inbox/conversations/:id/messages', [AuthMiddleware::class, 'handle'], [InboxController::class, 'sendMessage']);
+$router->post('/api/inbox/conversations/:id/read', [AuthMiddleware::class, 'handle'], [InboxController::class, 'markRead']);
+$router->put('/api/inbox/conversations/:id/mute', [AuthMiddleware::class, 'handle'], [InboxController::class, 'toggleMute']);
+$router->put('/api/inbox/conversations/:id/pin', [AuthMiddleware::class, 'handle'], [InboxController::class, 'togglePin']);
+$router->post('/api/inbox/conversations/:id/clear', [AuthMiddleware::class, 'handle'], [InboxController::class, 'clearConversation']);
+$router->post('/api/inbox/conversations/:id/restore', [AuthMiddleware::class, 'handle'], [InboxController::class, 'restoreConversation']);
+$router->delete('/api/inbox/conversations/:id', [AuthMiddleware::class, 'handle'], [InboxController::class, 'hideConversation']);
+
 // ── UPLOAD ──────────────────────────────────────────────────────────────────
 // Upload gambar ke Cloudinary (auth required) — dipakai PostModal.
 $router->post('/api/upload', [AuthMiddleware::class, 'handle'], [UploadController::class, 'uploadImage']);
@@ -133,6 +148,7 @@ $router->post('/api/collab/:id/apply', [AuthMiddleware::class, 'handle'], [Colla
 $router->get('/api/collab/:id/applications', [AuthMiddleware::class, 'handle'], [CollabController::class, 'listApplications']);
 $router->put('/api/collab/:id/applications/:applicationId/accept', [AuthMiddleware::class, 'handle'], [CollabController::class, 'acceptApplication']);
 $router->put('/api/collab/:id/applications/:applicationId/decline', [AuthMiddleware::class, 'handle'], [CollabController::class, 'declineApplication']);
+$router->delete('/api/collab/:id/apply', [AuthMiddleware::class, 'handle'], [CollabController::class, 'withdrawApplication']);
 
 // ── SKILLS MODULE ─────────────────────────────────────────────────────────────
 // GET /api/skills: skill system + private skill milik user yang sedang login
