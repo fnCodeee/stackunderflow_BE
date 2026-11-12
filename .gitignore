@@ -15,3 +15,6 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Env khusus Docker (berisi kredensial DB) — jangan di-commit
+.env.docker
