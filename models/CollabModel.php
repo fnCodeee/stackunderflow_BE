@@ -998,6 +998,35 @@ class CollabModel
         return $members;
     }
 
+    /**
+     * Status aplikasi satu user di banyak collab sekaligus (untuk
+     * payload daftar: tombol Apply di kartu berubah mengikuti
+     * status ini). Satu query per halaman, bukan per kartu.
+     *
+     * @param  string   $userId    UUID user yang login
+     * @param  string[] $collabIds UUID collab dalam satu halaman
+     * @return array<string, string> Map collab_id => status API
+     */
+    public static function applicationStatusesForUser(string $userId, array $collabIds): array
+    {
+        if ($collabIds === []) {
+            return [];
+        }
+        $pdo = getDB();
+        $placeholders = implode(',', array_fill(0, count($collabIds), '?'));
+        $stmt = $pdo->prepare("
+            SELECT collab_id, status
+            FROM collaboration_applications
+            WHERE user_id = ? AND collab_id IN ($placeholders)
+        ");
+        $stmt->execute([$userId, ...$collabIds]);
+        $map = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $map[$row['collab_id']] = self::mapApplicationStatus($row['status']);
+        }
+        return $map;
+    }
+
     public static function countAcceptedMembers(string $collabId, ?PDO $pdo = null): int
     {
         $pdo ??= getDB();

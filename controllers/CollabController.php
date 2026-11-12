@@ -201,6 +201,24 @@ class CollabController
             }
 
             $pageResult = CollabModel::getPage($q, $sort, $page, $limit);
+
+            // my_application per item untuk user login (null kalau
+            // tidak login / belum pernah apply) — kartu di daftar
+            // menampilkan Pending / Joined, bukan tombol Apply lagi.
+            $myUserId = $GLOBALS['user']['id'] ?? null;
+            if ($myUserId !== null && $pageResult['data'] !== []) {
+                $statusMap = CollabModel::applicationStatusesForUser(
+                    (string) $myUserId,
+                    array_column($pageResult['data'], 'id')
+                );
+                foreach ($pageResult['data'] as &$item) {
+                    $item['my_application'] = isset($statusMap[$item['id']])
+                        ? ['status' => $statusMap[$item['id']]]
+                        : null;
+                }
+                unset($item);
+            }
+
             Response::json(
                 $pageResult['data'],
                 200,
