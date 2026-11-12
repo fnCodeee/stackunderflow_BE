@@ -583,6 +583,27 @@ class CollabModel
             $memberCountMap[$member['collaboration_id']] = (int) $member['accepted_member_count'];
         }
 
+        // Daftar anggota diterima per collab (untuk Team di halaman
+        // detail) — satu query untuk semua collab, dikelompokkan per
+        // collaboration_id, urut waktu gabung.
+        $memberListStmt = $pdo->prepare("
+            SELECT uc.collaboration_id, u.id, u.username, pr.photo_profile_url
+            FROM user_collaboration uc
+            JOIN users u ON u.id = uc.user_id
+            LEFT JOIN profiles pr ON pr.user_id = u.id
+            WHERE uc.collaboration_id IN ($placeholders)
+            ORDER BY uc.created_at ASC
+        ");
+        $memberListStmt->execute($collabIds);
+        $membersMap = [];
+        foreach ($memberListStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $membersMap[$row['collaboration_id']][] = [
+                'id' => $row['id'],
+                'username' => $row['username'] ?? '',
+                'photo_profile_url' => $row['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
+            ];
+        }
+
         $result = [];
         foreach ($collabs as $collab) {
             $cid = $collab['id'];
@@ -600,6 +621,7 @@ class CollabModel
                 'accepted_member_count' => $acceptedMemberCount,
                 'available_slots' => max(0, $requiredMember - $acceptedMemberCount),
                 'skills_needed' => $skillsMap[$cid] ?? [],
+                'members' => $membersMap[$cid] ?? [],
                 'owner' => [
                     'id' => $collab['user_id'],
                     'username' => $collab['username'] ?? '',
@@ -728,6 +750,7 @@ class CollabModel
             'media_urls' => $mediaUrls,
             'media_public_ids' => $mediaPublicIds,
             'skills_needed' => $skills,
+            'members' => self::acceptedMembers($id, $pdo),
             'circle' => $circle,
             'owner' => [
                 'id' => $collab['user_id'],
@@ -943,6 +966,38 @@ class CollabModel
      * @param  PDO|null $pdo      Koneksi (dipakai saat di dalam transaksi)
      * @return int Jumlah anggota diterima
      */
+    /**
+     * Daftar anggota diterima (baris user_collaboration) beserta
+     * profil singkatnya, urut waktu gabung. Dipakai payload detail
+     * supaya Team menampilkan orang beneran, bukan cuma hitungan.
+     *
+     * @param  string   $collabId UUID collaboration
+     * @param  PDO|null $pdo      Koneksi (dipakai saat di dalam transaksi)
+     * @return array<int, array{id: string, username: string, photo_profile_url: string}>
+     */
+    public static function acceptedMembers(string $collabId, ?PDO $pdo = null): array
+    {
+        $pdo ??= getDB();
+        $stmt = $pdo->prepare("
+            SELECT u.id, u.username, pr.photo_profile_url
+            FROM user_collaboration uc
+            JOIN users u ON u.id = uc.user_id
+            LEFT JOIN profiles pr ON pr.user_id = u.id
+            WHERE uc.collaboration_id = :id
+            ORDER BY uc.created_at ASC
+        ");
+        $stmt->execute([':id' => $collabId]);
+        $members = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $members[] = [
+                'id' => $row['id'],
+                'username' => $row['username'] ?? '',
+                'photo_profile_url' => $row['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
+            ];
+        }
+        return $members;
+    }
+
     public static function countAcceptedMembers(string $collabId, ?PDO $pdo = null): int
     {
         $pdo ??= getDB();
