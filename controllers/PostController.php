@@ -70,6 +70,10 @@ class PostController
             if (is_array($mediaPublicIds) && count($mediaPublicIds) > 0 && count($mediaUrls) !== count($mediaPublicIds)) {
                 Response::json(null, 400, 'Count of mediaUrls and mediaPublicIds must be same!', false);
             }
+            // Media harus berasal dari Cloudinary sendiri (folder underflow)
+            if (is_array($mediaUrls) && count($mediaUrls) > 0) {
+                UploadController::assertValidMedia(array_values($mediaUrls), is_array($mediaPublicIds) ? array_values($mediaPublicIds) : []);
+            }
 
             $externalUrl = ($externalUrlRaw !== null && trim((string)$externalUrlRaw) !== '')
                 ? trim((string)$externalUrlRaw)
@@ -237,6 +241,10 @@ class PostController
             // Validasi konsistensi media jika disediakan
             if (is_array($mediaUrls) && is_array($mediaPublicIds) && count($mediaPublicIds) > 0 && count($mediaUrls) !== count($mediaPublicIds)) {
                 Response::json(null, 400, 'Count of mediaUrls and mediaPublicIds must be same!', false);
+            }
+            // Media harus berasal dari Cloudinary sendiri (folder underflow)
+            if (is_array($mediaUrls) && count($mediaUrls) > 0) {
+                UploadController::assertValidMedia(array_values($mediaUrls), is_array($mediaPublicIds) ? array_values($mediaPublicIds) : []);
             }
 
             $externalUrl = $externalUrlRaw === null ? null : trim((string)$externalUrlRaw);

@@ -121,6 +121,8 @@ $router->delete('/api/inbox/conversations/:id', [AuthMiddleware::class, 'handle'
 // ── UPLOAD ──────────────────────────────────────────────────────────────────
 // Upload gambar ke Cloudinary (auth required) — dipakai PostModal.
 $router->post('/api/upload', [AuthMiddleware::class, 'handle'], [UploadController::class, 'uploadImage']);
+// Tanda tangan untuk upload langsung ke Cloudinary (auth required) - file tidak lewat server.
+$router->post('/api/upload/signature', [AuthMiddleware::class, 'handle'], [UploadController::class, 'signature']);
 
 // ── COLLABORATIONS MODULE ─────────────────────────────────────────────────────
 // Phase 4C: Create Collaboration + Auto-create Circle

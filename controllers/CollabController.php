@@ -90,6 +90,10 @@ class CollabController
             if (is_array($mediaPublicIds) && count($mediaPublicIds) > 0 && count($mediaUrls) !== count($mediaPublicIds)) {
                 Response::json(null, 400, 'Count of mediaUrls and mediaPublicIds must be same!', false);
             }
+            // Media harus berasal dari Cloudinary sendiri (folder underflow)
+            if (is_array($mediaUrls) && count($mediaUrls) > 0) {
+                UploadController::assertValidMedia(array_values($mediaUrls), is_array($mediaPublicIds) ? array_values($mediaPublicIds) : []);
+            }
 
             // 4. Validasi format dan keberadaan skills di tabel master skills
             $normalizedSkillIds = [];
@@ -390,6 +394,10 @@ class CollabController
                 if (!is_array($mediaUrls) || count($mediaUrls) !== count($mediaPublicIds) || count($mediaUrls) === 0) {
                     Response::json(null, 400, 'Jika mediaPublicIds disediakan, mediaUrls dan mediaPublicIds harus sama dan tidak kosong', false);
                 }
+            }
+            // Media harus berasal dari Cloudinary sendiri (folder underflow)
+            if (is_array($mediaUrls) && count($mediaUrls) > 0) {
+                UploadController::assertValidMedia(array_values($mediaUrls), is_array($mediaPublicIds) ? array_values($mediaPublicIds) : []);
             }
 
             // CEK OWNERSHIP SEBELUM UPDATE (mirip Express: findById lalu compare user_id)

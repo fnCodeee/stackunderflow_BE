@@ -176,4 +176,154 @@ class UploadController
             Response::json(null, 500, $e->getMessage(), false);
         }
     }
+    /** Batas penerbitan tanda tangan per user per jam (anti penyalahgunaan). */
+    private const SIGNATURE_LIMIT_PER_HOUR = 60;
+
+    /**
+     * Membaca konfigurasi Cloudinary dari .env.
+     * Utama: CLOUDINARY_URL (cloudinary://<key>:<secret>@<cloud>);
+     * fallback: tiga var terpisah. Logika yang sama seperti blok
+     * konfigurasi di uploadImage() — diduplikasi sementara supaya
+     * perubahan direct upload ini seminimal mungkin menyentuh kode lama;
+     * blok lama hilang bersama uploadImage() saat fase pembersihan.
+     *
+     * @return array{cloud_name: string, api_key: string, api_secret: string}
+     */
+    private static function cloudinaryConfig(): array
+    {
+        $cloudName = '';
+        $apiKey    = '';
+        $apiSecret = '';
+
+        $cloudinaryUrl = trim((string)(getenv('CLOUDINARY_URL') ?: ''));
+        if ($cloudinaryUrl !== '') {
+            $parts = parse_url($cloudinaryUrl);
+            if (
+                is_array($parts)
+                && isset($parts['host'], $parts['user'], $parts['pass'])
+                && $parts['host'] !== '' && $parts['user'] !== '' && $parts['pass'] !== ''
+            ) {
+                $cloudName = $parts['host'];
+                $apiKey    = urldecode($parts['user']);
+                $apiSecret = urldecode($parts['pass']);
+            }
+        }
+
+        if ($cloudName === '' || $apiKey === '' || $apiSecret === '') {
+            $cloudName = trim((string)(getenv('CLOUDINARY_CLOUD_NAME') ?: ''));
+            $apiKey    = trim((string)(getenv('CLOUDINARY_API_KEY') ?: ''));
+            $apiSecret = trim((string)(getenv('CLOUDINARY_API_SECRET') ?: ''));
+        }
+
+        return ['cloud_name' => $cloudName, 'api_key' => $apiKey, 'api_secret' => $apiSecret];
+    }
+
+    /**
+     * Handler untuk POST /api/upload/signature
+     *
+     * Menerbitkan tanda tangan supaya frontend bisa mengunggah file
+     * LANGSUNG ke Cloudinary tanpa file mampir ke server ini
+     * (menghemat CPU/RAM/bandwidth server). File diunggah client ke
+     * Cloudinary memakai api_key + timestamp + signature dari sini,
+     * lalu client mengirim URL hasilnya saat membuat post/collab.
+     *
+     * Yang ditandatangani (terurut alfabetis, sesuai aturan Cloudinary):
+     * folder, tags, timestamp. Tags berisi cap identitas pengupload
+     * ("user_<id>") sehingga setiap aset yang masuk bisa dilacak
+     * pemiliknya dan tidak bisa diganti oleh client.
+     *
+     * Setiap penerbitan dicatat di tabel upload_grants dan dibatasi
+     * SIGNATURE_LIMIT_PER_HOUR per user per jam.
+     *
+     * @param  array<string, string> $params Path parameters dari Router
+     * @return void
+     */
+    public static function signature(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $config = self::cloudinaryConfig();
+            if ($config['cloud_name'] === '' || $config['api_key'] === '' || $config['api_secret'] === '') {
+                Response::json(null, 500, 'Upload gambar belum dikonfigurasi.', false);
+            }
+
+            $pdo = getDB();
+
+            // Batas pemakaian: hitung tanda tangan yang diterbitkan
+            // untuk user ini dalam 1 jam terakhir.
+            $stmt = $pdo->prepare(
+                'SELECT COUNT(*) FROM upload_grants WHERE user_id = :uid AND created_at > (NOW() - INTERVAL 1 HOUR)'
+            );
+            $stmt->execute([':uid' => $userId]);
+            if ((int)$stmt->fetchColumn() >= self::SIGNATURE_LIMIT_PER_HOUR) {
+                Response::json(null, 429, 'Terlalu banyak permintaan upload. Coba lagi nanti.', false);
+            }
+
+            $timestamp = time();
+            $tags      = 'user_' . $userId;
+            $paramsToSign = 'folder=' . self::CLOUDINARY_FOLDER . '&tags=' . $tags . '&timestamp=' . $timestamp;
+            $signature = sha1($paramsToSign . $config['api_secret']);
+
+            $stmt = $pdo->prepare('INSERT INTO upload_grants (user_id) VALUES (:uid)');
+            $stmt->execute([':uid' => $userId]);
+
+            Response::json([
+                'cloud_name' => $config['cloud_name'],
+                'api_key'    => $config['api_key'],
+                'timestamp'  => $timestamp,
+                'signature'  => $signature,
+                'folder'     => self::CLOUDINARY_FOLDER,
+                'tags'       => $tags,
+            ], 200, 'Tanda tangan upload diterbitkan', true);
+        } catch (Throwable $e) {
+            Response::json(null, 500, $e->getMessage(), false);
+        }
+    }
+
+    /**
+     * Validasi daftar media yang dikirim client saat membuat/mengubah
+     * post atau collab. Semua URL harus berasal dari Cloudinary milik
+     * sendiri dan folder underflow; public_id yang diisi (boleh kosong
+     * untuk data lama) juga harus dari folder yang sama. Maksimal 5.
+     * Dipanggil dari PostController dan CollabController.
+     *
+     * @param  array<int, mixed> $mediaUrls
+     * @param  array<int, mixed> $mediaPublicIds
+     * @return void  Response::json di dalamnya selalu exit.
+     */
+    public static function assertValidMedia(array $mediaUrls, array $mediaPublicIds = []): void
+    {
+        if (count($mediaUrls) > 5) {
+            Response::json(null, 400, 'Maksimal 5 gambar.', false);
+        }
+
+        if (count($mediaUrls) === 0) {
+            return;
+        }
+
+        $config = self::cloudinaryConfig();
+        if ($config['cloud_name'] === '') {
+            Response::json(null, 500, 'Upload gambar belum dikonfigurasi.', false);
+        }
+
+        $prefix = 'https://res.cloudinary.com/' . $config['cloud_name'] . '/image/upload/';
+        foreach ($mediaUrls as $url) {
+            if (!is_string($url) || !str_starts_with($url, $prefix)) {
+                Response::json(null, 400, 'URL media tidak valid.', false);
+            }
+        }
+
+        foreach ($mediaPublicIds as $publicId) {
+            // Kosong/null dilewati: data lama memang ada yang belum
+            // punya public_id. Yang terisi wajib dari folder sendiri.
+            if (is_string($publicId) && $publicId !== '' && !str_starts_with($publicId, self::CLOUDINARY_FOLDER . '/')) {
+                Response::json(null, 400, 'Media tidak valid.', false);
+            }
+        }
+    }
 }
