@@ -410,15 +410,23 @@ class CollabController
                 }
                 $updateData['required_member'] = (int)$requiredMember;
             }
-            if ($dueDate !== null && $dueDate !== '') {
-                $dueTimestamp = strtotime((string)$dueDate);
-                if ($dueTimestamp === false) {
-                    Response::json(null, 400, 'Format due_date tidak valid', false);
+            // due_date: kunci DIKIRIM dengan nilai kosong/null berarti
+            // "hapus tanggal" (form edit bisa mengosongkannya); kunci
+            // yang tidak dikirim sama sekali berarti "jangan diubah".
+            $clearDueDate = false;
+            if (array_key_exists('due_date', $body) || array_key_exists('dueDate', $body)) {
+                if ($dueDate === null || trim((string)$dueDate) === '') {
+                    $clearDueDate = true;
+                } else {
+                    $dueTimestamp = strtotime((string)$dueDate);
+                    if ($dueTimestamp === false) {
+                        Response::json(null, 400, 'Format due_date tidak valid', false);
+                    }
+                    if (date('Y-m-d', $dueTimestamp) < date('Y-m-d')) {
+                        Response::json(null, 400, 'due_date tidak boleh di masa lalu', false);
+                    }
+                    $updateData['due_date'] = date('Y-m-d', $dueTimestamp);
                 }
-                if (date('Y-m-d', $dueTimestamp) < date('Y-m-d')) {
-                    Response::json(null, 400, 'due_date tidak boleh di masa lalu', false);
-                }
-                $updateData['due_date'] = date('Y-m-d', $dueTimestamp);
             }
 
             // Validasi skills jika disediakan — tanpa menulis apa pun dulu.
@@ -458,13 +466,14 @@ class CollabController
                 }
             }
 
-            // Media hanya diupdate kalau mediaUrls + mediaPublicIds dikirim berpasangan.
+            // Media hanya diupdate kalau mediaUrls + mediaPublicIds dikirim
+            // berpasangan (jumlah sama). Pasangan kosong = hapus semua foto
+            // (form edit menghapus foto terakhir).
             $hasMediaUpdate = is_array($mediaUrls)
                 && is_array($mediaPublicIds)
-                && count($mediaUrls) > 0
                 && count($mediaPublicIds) === count($mediaUrls);
 
-            if (empty($updateData) && $normalizedSkillIds === null && !$hasMediaUpdate) {
+            if (empty($updateData) && !$clearDueDate && $normalizedSkillIds === null && !$hasMediaUpdate) {
                 Response::json(null, 400, 'Tidak ada data yang diperbarui', false);
             }
 
@@ -521,6 +530,11 @@ class CollabController
                         $circleStmt = $pdo->prepare("UPDATE circle SET title = :title WHERE collaboration_id = :collab_id");
                         $circleStmt->execute([':title' => $updateData['title'], ':collab_id' => $collabId]);
                     }
+                }
+
+                if ($clearDueDate) {
+                    $clearDueStmt = $pdo->prepare("UPDATE collaborations SET due_date = NULL WHERE id = :id");
+                    $clearDueStmt->execute([':id' => $collabId]);
                 }
 
                 $pdo->commit();
