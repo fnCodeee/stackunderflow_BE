@@ -82,4 +82,24 @@ class ReportController
             Response::json(null, 500, 'Internal Server error: ' . $e->getMessage(), false);
         }
     }
+
+    /** DELETE /api/reports/:id — pelapor menarik laporannya (Undo). */
+    public static function withdraw(array $params = []): void
+    {
+        try {
+            $reporterId = (string) ($GLOBALS['user']['id'] ?? '');
+            $id = (string) ($params['id'] ?? '');
+            if ($reporterId === '' || $id === '') {
+                Response::json(null, 400, 'Permintaan tidak valid.', false);
+            }
+            $ok = ReportModel::deleteOpenById($id, $reporterId);
+            if (!$ok) {
+                Response::json(null, 404, 'Laporan tidak ditemukan atau sudah diproses.', false);
+            }
+            Response::json(null, 200, 'Laporan ditarik.', true);
+        } catch (Throwable $e) {
+            error_log('[REPORT WITHDRAW ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Internal Server error: ' . $e->getMessage(), false);
+        }
+    }
 }

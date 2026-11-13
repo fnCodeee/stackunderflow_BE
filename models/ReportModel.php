@@ -36,6 +36,15 @@ class ReportModel
         return $row ?: null;
     }
 
+    /** Hapus report yang masih open milik pelapor sendiri (Undo). */
+    public static function deleteOpenById(string $id, string $reporterId): bool
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare("DELETE FROM reports WHERE id = ? AND reporter_id = ? AND status = 'open'");
+        $stmt->execute([$id, $reporterId]);
+        return $stmt->rowCount() > 0;
+    }
+
     public static function create(string $reporterId, string $targetType, string $targetId, string $reason): array
     {
         $pdo = getDB();

@@ -179,4 +179,5 @@ $router->get('/api/users/:id', [OptionalAuthMiddleware::class, 'handle'], [UserC
 
 // ── Reports + Admin (spec-admin) ─────────────────────────────────────────────
 $router->post('/api/reports', [AuthMiddleware::class, 'handle'], [ReportController::class, 'create']);
+$router->delete('/api/reports/:id', [AuthMiddleware::class, 'handle'], [ReportController::class, 'withdraw']);
 $router->get('/api/admin/overview', [AdminMiddleware::class, 'handle'], [AdminController::class, 'overview']);
