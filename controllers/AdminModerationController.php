@@ -179,7 +179,7 @@ class AdminModerationController
             $label = self::ACTION_LABEL[$actionType] ?? $actionType;
             self::notifySuperAdmins(
                 (string) $actor['id'],
-                ($actor['username'] ?? 'Monitor') . ' mengajukan ' . $label,
+                'Mengajukan ' . $label,
                 $id
             );
             Response::json(['id' => $id], 201, 'Pengajuan terkirim.', true);
@@ -266,7 +266,7 @@ class AdminModerationController
                     (string) $request['requester_id'],
                     (string) $actor['id'],
                     'admin_request_decided',
-                    'Pengajuan ' . $label . ' kamu ditolak',
+                    'Pengajuan ' . $label . ' ditolak',
                     $id
                 );
                 Response::json(['id' => $id, 'status' => 'rejected'], 200, 'Pengajuan ditolak.', true);
@@ -290,7 +290,7 @@ class AdminModerationController
                 (string) $request['requester_id'],
                 (string) $actor['id'],
                 'admin_request_decided',
-                'Pengajuan ' . $label . ' kamu disetujui dan sudah dieksekusi',
+                'Pengajuan ' . $label . ' disetujui dan dieksekusi',
                 $id
             );
             Response::json(['id' => $id, 'status' => 'approved', 'action_id' => $result['action_id']], 200, 'Pengajuan disetujui dan dieksekusi.', true);
