@@ -34,6 +34,18 @@ class ModerationService
         'remove_collab' => 'collab',
     ];
 
+    /** Jenis aksi yang bisa dibanding (spec §4.4). */
+    public const APPEALABLE = ['remove_post', 'remove_comment', 'remove_collab', 'suspend_user'];
+
+    /** Satu baris moderation_actions berdasarkan id. */
+    public static function actionById(string $id): ?array
+    {
+        $stmt = getDB()->prepare("SELECT * FROM moderation_actions WHERE id = ? LIMIT 1");
+        $stmt->execute([$id]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ?: null;
+    }
+
     public static function uuid(): string
     {
         return InboxModel::generateUuid();
@@ -346,6 +358,82 @@ class ModerationService
         return ['action_id' => $actionId, 'owner_id' => $inner['owner_id'] ?? null];
     }
 
+    /**
+     * Putusan banding (spec §4.5). granted membalikkan aksi asal lewat
+     * jalur yang sama seperti restore/unsuspend manual dan menulis
+     * audit grant_appeal; denied menulis audit deny_appeal. Keduanya
+     * mengirim pesan hasil ke thread sistem user.
+     */
+    public static function applyAppealDecision(array $appeal, array $original, string $decision, array $decider, string $note): void
+    {
+        $pdo = getDB();
+        $deciderId = (string) $decider['id'];
+        $ownerId = (string) $appeal['user_id'];
+        $type = (string) $original['action_type'];
+        $targetType = (string) $original['target_type'];
+        $targetId = (string) $original['target_id'];
+        $kindLabel = ['post' => 'post', 'comment' => 'comment', 'collab' => 'collaboration'][$targetType] ?? 'content';
+
+        if ($decision === 'granted') {
+            if (isset(self::REMOVE_ACTIONS[$type])) {
+                $table = self::CONTENT_TABLES[$targetType];
+                $pdo->prepare(
+                    "UPDATE $table SET moderation_state = 'visible', removed_by = NULL, removed_at = NULL, removal_reason = NULL WHERE id = ?"
+                )->execute([$targetId]);
+            } elseif ($type === 'suspend_user') {
+                $pdo->prepare(
+                    "UPDATE users SET account_status = 'active', suspended_reason = NULL, suspended_at = NULL, suspended_by = NULL WHERE id = ?"
+                )->execute([$targetId]);
+            }
+            self::markRevertedById($pdo, (string) $original['id'], $deciderId);
+            self::writeAction($pdo, [
+                'action_type' => 'grant_appeal',
+                'target_type' => $targetType,
+                'target_id' => $targetId,
+                'target_owner_id' => $ownerId,
+                'actor_id' => $deciderId,
+                'requested_by' => null,
+                'request_id' => null,
+                'reason' => $note !== '' ? $note : 'Banding diterima.',
+                'strike' => 0,
+            ]);
+            $lines = $type === 'suspend_user'
+                ? ['Your appeal was accepted. Your account has been reactivated and you can log in again.']
+                : ["Your appeal was accepted. Your $kindLabel has been restored."];
+            if ($note !== '') {
+                $lines[] = '';
+                $lines[] = 'Note from the moderation team: ' . $note;
+            }
+            self::sendSystemNotice($ownerId, implode("\n", $lines));
+            return;
+        }
+
+        self::writeAction($pdo, [
+            'action_type' => 'deny_appeal',
+            'target_type' => $targetType,
+            'target_id' => $targetId,
+            'target_owner_id' => $ownerId,
+            'actor_id' => $deciderId,
+            'requested_by' => null,
+            'request_id' => null,
+            'reason' => $note,
+            'strike' => 0,
+        ]);
+        $lines = ['Your appeal was reviewed and denied.'];
+        $lines[] = 'Decision note: ' . $note;
+        if ($type === 'suspend_user') {
+            $lines[] = '';
+            $lines[] = 'Your account remains suspended.';
+        }
+        self::sendSystemNotice($ownerId, implode("\n", $lines));
+    }
+
+    private static function markRevertedById(PDO $pdo, string $actionId, string $actorId): void
+    {
+        $pdo->prepare("UPDATE moderation_actions SET reverted_at = NOW(), reverted_by = ? WHERE id = ? AND reverted_at IS NULL")
+            ->execute([$actorId, $actionId]);
+    }
+
     private static function markReverted(PDO $pdo, string $targetType, string $targetId, array $actionTypes, string $actorId): void
     {
         $in = implode(',', array_fill(0, count($actionTypes), '?'));
@@ -407,20 +495,30 @@ class ModerationService
 
     private static function sendRemovalNotice(string $ownerId, string $actionId, string $targetType, string $label, string $reason, ?int $strikeNo): void
     {
+        $kindLabel = ['post' => 'post', 'comment' => 'comment', 'collab' => 'collaboration'][$targetType] ?? 'content';
+        $lines = [];
+        $lines[] = "Your $kindLabel was removed by the Underflow moderation team.";
+        $lines[] = '';
+        $lines[] = '"' . $label . '"';
+        $lines[] = 'Reason: ' . $reason;
+        if ($strikeNo !== null) {
+            $lines[] = '';
+            $lines[] = "This counts as strike $strikeNo on your account. Repeated violations may lead to a suspension.";
+        }
+        self::insertSystemMessage($ownerId, implode("\n", $lines), $actionId);
+    }
+
+    /** Pesan sistem satu arah ke user (hasil banding, dsb.). */
+    public static function sendSystemNotice(string $ownerId, string $body): void
+    {
+        self::insertSystemMessage($ownerId, $body, null);
+    }
+
+    private static function insertSystemMessage(string $ownerId, string $body, ?string $actionId): void
+    {
         try {
             $pdo = getDB();
             $convId = self::ensureSystemThread($pdo, $ownerId);
-            $kindLabel = ['post' => 'post', 'comment' => 'comment', 'collab' => 'collaboration'][$targetType] ?? 'content';
-            $lines = [];
-            $lines[] = "Your $kindLabel was removed by the Underflow moderation team.";
-            $lines[] = '';
-            $lines[] = '"' . $label . '"';
-            $lines[] = 'Reason: ' . $reason;
-            if ($strikeNo !== null) {
-                $lines[] = '';
-                $lines[] = "This counts as strike $strikeNo on your account. Repeated violations may lead to a suspension.";
-            }
-            $body = implode("\n", $lines);
 
             $id = self::uuid();
             $pdo->prepare(
@@ -429,7 +527,7 @@ class ModerationService
             $pdo->prepare("UPDATE dm_conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?")
                 ->execute([$convId]);
 
-            $stmt = $pdo->prepare("SELECT id, sender_id, body, is_read, created_at FROM dm_messages WHERE id = ?");
+            $stmt = $pdo->prepare("SELECT id, sender_id, body, is_read, created_at, moderation_action_id FROM dm_messages WHERE id = ?");
             $stmt->execute([$id]);
             $message = $stmt->fetch(PDO::FETCH_ASSOC);
             if ($message) {
@@ -439,6 +537,7 @@ class ModerationService
                     'body' => $message['body'],
                     'is_read' => (bool) $message['is_read'],
                     'created_at' => $message['created_at'],
+                    'moderation_action_id' => $message['moderation_action_id'],
                 ]);
             }
         } catch (Throwable $e) {

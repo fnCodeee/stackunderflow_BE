@@ -231,7 +231,7 @@ class InboxModel
             return null;
         }
         $stmt = $pdo->prepare("
-            SELECT id, sender_id, body, is_read, created_at
+            SELECT id, sender_id, body, is_read, created_at, moderation_action_id
             FROM dm_messages
             WHERE conversation_id = :conv
               AND (:cleared IS NULL OR created_at > :cleared2)
@@ -248,6 +248,7 @@ class InboxModel
             'body' => $m['body'],
             'is_read' => (bool) $m['is_read'],
             'created_at' => $m['created_at'],
+            'moderation_action_id' => $m['moderation_action_id'] ?? null,
         ], $stmt->fetchAll(PDO::FETCH_ASSOC));
     }
 

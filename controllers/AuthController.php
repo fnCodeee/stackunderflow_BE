@@ -15,6 +15,7 @@
 declare(strict_types=1);
 
 require_once BASE_PATH . '/models/UserModel.php';
+require_once BASE_PATH . '/models/AppealModel.php';
 require_once BASE_PATH . '/models/ProfileModel.php';
 require_once BASE_PATH . '/models/ProfileSocialMediaModel.php';
 require_once BASE_PATH . '/models/UserSkillModel.php';
@@ -256,6 +257,7 @@ class AuthController
                     'suspended' => true,
                     'reason' => $user['suspended_reason'] ?? null,
                     'suspended_at' => $user['suspended_at'] ?? null,
+                    'appeal' => AppealModel::suspendAppealInfo((string) $user['id']),
                 ], 403, 'Akun kamu sedang disuspend.', false);
             }
 
@@ -323,6 +325,7 @@ class AuthController
                     'suspended' => true,
                     'reason' => $user['suspended_reason'] ?? null,
                     'suspended_at' => $user['suspended_at'] ?? null,
+                    'appeal' => AppealModel::suspendAppealInfo((string) $user['id']),
                 ], 403, 'Akun kamu sedang disuspend.', false);
             }
 

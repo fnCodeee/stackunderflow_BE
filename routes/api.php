@@ -27,6 +27,8 @@ require_once BASE_PATH . '/middlewares/AdminMiddleware.php';
 require_once BASE_PATH . '/controllers/ReportController.php';
 require_once BASE_PATH . '/controllers/AdminController.php';
 require_once BASE_PATH . '/controllers/AdminModerationController.php';
+require_once BASE_PATH . '/controllers/AppealsController.php';
+require_once BASE_PATH . '/controllers/AdminAppealsController.php';
 
 // ── Health Check: GET / ───────────────────────────────────────────────────────
 $router->get('/', function (array $params): void {
@@ -181,6 +183,9 @@ $router->get('/api/users/:id', [OptionalAuthMiddleware::class, 'handle'], [UserC
 // ── Reports + Admin (spec-admin) ─────────────────────────────────────────────
 $router->post('/api/reports', [AuthMiddleware::class, 'handle'], [ReportController::class, 'create']);
 $router->delete('/api/reports/:id', [AuthMiddleware::class, 'handle'], [ReportController::class, 'withdraw']);
+$router->post('/api/appeals', [AuthMiddleware::class, 'handle'], [AppealsController::class, 'create']);
+$router->get('/api/appeals', [AuthMiddleware::class, 'handle'], [AppealsController::class, 'mine']);
+$router->post('/api/appeals/suspended', [AppealsController::class, 'suspended']);
 $router->get('/api/admin/overview', [AdminMiddleware::class, 'handle'], [AdminController::class, 'overview']);
 $router->get('/api/admin/users', [AdminMiddleware::class, 'handle'], [AdminController::class, 'users']);
 $router->get('/api/admin/users/:id', [AdminMiddleware::class, 'handle'], [AdminController::class, 'userDetail']);
@@ -191,3 +196,5 @@ $router->get('/api/admin/action-requests', [AdminMiddleware::class, 'handle'], [
 $router->post('/api/admin/action-requests/:id/decide', [AdminMiddleware::class, 'handle'], [AdminMiddleware::class, 'requireSuper'], [AdminModerationController::class, 'decide']);
 $router->get('/api/admin/reports', [AdminMiddleware::class, 'handle'], [AdminModerationController::class, 'reports']);
 $router->post('/api/admin/reports/:id/dismiss', [AdminMiddleware::class, 'handle'], [AdminMiddleware::class, 'requireSuper'], [AdminModerationController::class, 'dismissReport']);
+$router->get('/api/admin/appeals', [AdminMiddleware::class, 'handle'], [AdminAppealsController::class, 'index']);
+$router->post('/api/admin/appeals/:id/decide', [AdminMiddleware::class, 'handle'], [AdminMiddleware::class, 'requireSuper'], [AdminAppealsController::class, 'decide']);

@@ -339,7 +339,7 @@ class NotificationModel
             'collabId' => $row['type'] === 'application' ? ($row['target_id'] ?? null) : null,
             'link' => $postId
                 ? '/dashboard/' . $postId
-                : ($row['type'] === 'application' ? '/inbox' : (str_starts_with((string) $row['type'], 'admin_') ? '/admin/approvals' : null)),
+                : ($row['type'] === 'application' ? '/inbox' : (str_starts_with((string) $row['type'], 'admin_') ? ((string) $row['type'] === 'admin_appeal' ? '/admin/appeals' : '/admin/approvals') : null)),
         ];
     }
 
