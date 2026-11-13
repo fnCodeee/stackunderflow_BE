@@ -53,7 +53,7 @@ class AdminModel
                     p.photo_profile_url,
                     (SELECT COUNT(*) FROM public_posts pp WHERE pp.user_id = u.id AND pp.deleted_at IS NULL) AS post_count,
                     (SELECT COUNT(*) FROM collaborations c WHERE c.user_id = u.id AND c.deleted_at IS NULL) AS collabs_owned,
-                    (SELECT COUNT(*) FROM user_collaboration uc WHERE uc.user_id = u.id) AS collabs_joined,
+                    (SELECT COUNT(*) FROM user_collaboration uc JOIN collaborations c2 ON c2.id = uc.collaboration_id WHERE uc.user_id = u.id AND c2.deleted_at IS NULL AND c2.user_id != u.id) AS collabs_joined,
                     (SELECT COUNT(*) FROM moderation_actions ma WHERE ma.target_owner_id = u.id AND ma.strike = 1 AND ma.reverted_at IS NULL) AS strike_count
              FROM users u
              LEFT JOIN profiles p ON p.user_id = u.id
@@ -95,7 +95,7 @@ class AdminModel
                     p.photo_profile_url, p.full_name, p.bio,
                     (SELECT COUNT(*) FROM public_posts pp WHERE pp.user_id = u.id AND pp.deleted_at IS NULL) AS post_count,
                     (SELECT COUNT(*) FROM collaborations c WHERE c.user_id = u.id AND c.deleted_at IS NULL) AS collabs_owned,
-                    (SELECT COUNT(*) FROM user_collaboration uc WHERE uc.user_id = u.id) AS collabs_joined,
+                    (SELECT COUNT(*) FROM user_collaboration uc JOIN collaborations c2 ON c2.id = uc.collaboration_id WHERE uc.user_id = u.id AND c2.deleted_at IS NULL AND c2.user_id != u.id) AS collabs_joined,
                     (SELECT COUNT(*) FROM moderation_actions ma WHERE ma.target_owner_id = u.id AND ma.strike = 1 AND ma.reverted_at IS NULL) AS strike_count
              FROM users u
              LEFT JOIN profiles p ON p.user_id = u.id
