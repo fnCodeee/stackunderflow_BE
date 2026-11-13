@@ -60,10 +60,12 @@ class AuthMiddleware
                 $GLOBALS['user']['role'] = $account['role'] ?? 'user';
                 $GLOBALS['user']['account_status'] = $account['account_status'] ?? 'active';
                 if (($account['account_status'] ?? 'active') === 'suspended') {
+                    require_once BASE_PATH . '/models/AppealModel.php';
                     Response::json([
                         'suspended' => true,
                         'reason' => $account['suspended_reason'] ?? null,
                         'suspended_at' => $account['suspended_at'] ?? null,
+                        'appeal' => AppealModel::suspendAppealInfo((string) ($account['id'] ?? $decoded['id'] ?? '')),
                     ], 403, 'Akun kamu sedang disuspend.', false);
                 }
             }
