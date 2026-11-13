@@ -23,6 +23,9 @@ require_once BASE_PATH . '/controllers/UserController.php';
 require_once BASE_PATH . '/controllers/UploadController.php';
 require_once BASE_PATH . '/controllers/NotificationController.php';
 require_once BASE_PATH . '/controllers/InboxController.php';
+require_once BASE_PATH . '/middlewares/AdminMiddleware.php';
+require_once BASE_PATH . '/controllers/ReportController.php';
+require_once BASE_PATH . '/controllers/AdminController.php';
 
 // ── Health Check: GET / ───────────────────────────────────────────────────────
 $router->get('/', function (array $params): void {
@@ -174,3 +177,6 @@ $router->delete('/api/skills/:id', [AuthMiddleware::class, 'handle'], [SkillCont
 // (added 2026-11-10; "me" resolves to the logged-in user).
 $router->get('/api/users/:id', [OptionalAuthMiddleware::class, 'handle'], [UserController::class, 'getUser']);
 
+// ── Reports + Admin (spec-admin) ─────────────────────────────────────────────
+$router->post('/api/reports', [AuthMiddleware::class, 'handle'], [ReportController::class, 'create']);
+$router->get('/api/admin/overview', [AdminMiddleware::class, 'handle'], [AdminController::class, 'overview']);

@@ -191,6 +191,15 @@ class InboxModel
     }
 
     /** Baris peserta (untuk cek akses + flag), atau null kalau bukan peserta. */
+    /** Jenis thread: direct / application / system (spec-admin §3.6). */
+    public static function kindOf(PDO $pdo, string $conversationId): ?string
+    {
+        $stmt = $pdo->prepare("SELECT kind FROM dm_conversations WHERE id = ? LIMIT 1");
+        $stmt->execute([$conversationId]);
+        $kind = $stmt->fetchColumn();
+        return $kind === false ? null : (string) $kind;
+    }
+
     public static function participantRow(PDO $pdo, string $conversationId, string $userId): ?array
     {
         $stmt = $pdo->prepare("SELECT * FROM dm_participants WHERE conversation_id = :conv AND user_id = :user LIMIT 1");

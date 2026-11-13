@@ -160,7 +160,7 @@ class CommentModel
             FROM comments c
             LEFT JOIN users u ON c.user_id = u.id
             LEFT JOIN profiles pr ON c.user_id = pr.user_id
-            WHERE c.post_id = ? AND c.deleted_at IS NULL
+            WHERE c.post_id = ? AND c.deleted_at IS NULL AND moderation_state = 'visible'
             ORDER BY c.created_at DESC
         ";
         $stmt = $pdo->prepare($sql);
@@ -221,7 +221,7 @@ class CommentModel
     public static function countByPostId(string $postId): int
     {
         $pdo = getDB();
-        $stmt = $pdo->prepare("SELECT COUNT(*) FROM comments WHERE post_id = :post_id AND deleted_at IS NULL");
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM comments WHERE post_id = :post_id AND deleted_at IS NULL AND moderation_state = 'visible'");
         $stmt->execute([':post_id' => $postId]);
         return (int)$stmt->fetchColumn();
     }

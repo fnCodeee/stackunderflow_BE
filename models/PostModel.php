@@ -142,7 +142,7 @@ class PostModel
             FROM public_posts p
             LEFT JOIN users u ON p.user_id = u.id
             LEFT JOIN profiles pr ON p.user_id = pr.user_id
-            WHERE p.id = :id AND p.deleted_at IS NULL
+            WHERE p.id = :id AND p.deleted_at IS NULL AND moderation_state = 'visible'
             LIMIT 1
         ";
         $stmt = $pdo->prepare($sql);
@@ -174,7 +174,7 @@ class PostModel
         $likeCount = (int)($likeStmt->fetchColumn() ?? 0);
 
         // 5. Ambil comment_count
-        $commentStmt = $pdo->prepare("SELECT COUNT(*) as count FROM comments WHERE post_id = :post_id AND deleted_at IS NULL");
+        $commentStmt = $pdo->prepare("SELECT COUNT(*) as count FROM comments WHERE post_id = :post_id AND deleted_at IS NULL AND moderation_state = 'visible'");
         $commentStmt->execute([':post_id' => $id]);
         $commentCount = (int)($commentStmt->fetchColumn() ?? 0);
 
@@ -200,7 +200,7 @@ class PostModel
             FROM comments c
             LEFT JOIN users u ON c.user_id = u.id
             LEFT JOIN profiles pr ON c.user_id = pr.user_id
-            WHERE c.post_id = :post_id AND c.deleted_at IS NULL
+            WHERE c.post_id = :post_id AND c.deleted_at IS NULL AND moderation_state = 'visible'
             ORDER BY c.created_at DESC
         ";
         $commentsStmt = $pdo->prepare($commentsSql);
@@ -352,7 +352,7 @@ class PostModel
         $stmt->execute([$postId]);
         $likes = (int)$stmt->fetchColumn();
 
-        $stmt = $pdo->prepare('SELECT COUNT(*) FROM comments WHERE post_id = ? AND deleted_at IS NULL');
+        $stmt = $pdo->prepare('SELECT COUNT(*) FROM comments WHERE post_id = ? AND deleted_at IS NULL AND moderation_state = \'visible\'');
         $stmt->execute([$postId]);
         $commentCount = (int)$stmt->fetchColumn();
 
@@ -414,7 +414,7 @@ class PostModel
             FROM public_posts p
             LEFT JOIN users u ON p.user_id = u.id
             LEFT JOIN profiles pr ON p.user_id = pr.user_id
-            WHERE p.deleted_at IS NULL
+            WHERE p.deleted_at IS NULL AND moderation_state = 'visible'
             ORDER BY p.created_at DESC
         ";
 
@@ -464,7 +464,7 @@ class PostModel
         $commentStmt = $pdo->prepare("
             SELECT post_id, COUNT(*) as count 
             FROM comments 
-            WHERE post_id IN ($placeholders) AND deleted_at IS NULL 
+            WHERE post_id IN ($placeholders) AND deleted_at IS NULL AND moderation_state = 'visible' 
             GROUP BY post_id
         ");
         $commentStmt->execute($postIds);

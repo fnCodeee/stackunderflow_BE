@@ -296,7 +296,7 @@ class CollabModel
             ON c.user_id = u.id
         LEFT JOIN profiles pr
             ON c.user_id = pr.user_id
-        WHERE c.deleted_at IS NULL
+        WHERE c.deleted_at IS NULL AND moderation_state = 'visible'
         ORDER BY c.created_at DESC
     ";
 
@@ -425,7 +425,7 @@ class CollabModel
     {
         $pdo = getDB();
 
-        $where = 'WHERE c.deleted_at IS NULL';
+        $where = 'WHERE c.deleted_at IS NULL AND moderation_state = \'visible\'';
         $params = [];
 
         $q = trim($q);
@@ -531,7 +531,7 @@ class CollabModel
                 ON ca.collab_id = c.id AND ca.user_id = ? AND ca.status = 'pending'
             LEFT JOIN users u ON c.user_id = u.id
             LEFT JOIN profiles pr ON c.user_id = pr.user_id
-            WHERE c.deleted_at IS NULL AND (c.user_id = ? OR uc.user_id = ? OR ca.id IS NOT NULL)
+            WHERE c.deleted_at IS NULL AND moderation_state = 'visible' AND (c.user_id = ? OR uc.user_id = ? OR ca.id IS NOT NULL)
             ORDER BY c.created_at DESC
         ";
 
@@ -684,7 +684,7 @@ class CollabModel
             ON c.user_id = u.id
         LEFT JOIN profiles pr
             ON c.user_id = pr.user_id
-        WHERE c.id = :id AND c.deleted_at IS NULL
+        WHERE c.id = :id AND c.deleted_at IS NULL AND moderation_state = 'visible'
         LIMIT 1
     ");
 
@@ -821,7 +821,7 @@ class CollabModel
                 c.created_at,
                 c.updated_at
             FROM collaborations c
-            WHERE c.user_id = :user_id AND c.deleted_at IS NULL
+            WHERE c.user_id = :user_id AND c.deleted_at IS NULL AND moderation_state = 'visible'
             ORDER BY c.created_at DESC
         ");
         $collabStmt->execute([':user_id' => $userId]);

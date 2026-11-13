@@ -250,6 +250,15 @@ class AuthController
             }
 
             // 6. Balas JWT yang sama seperti login biasa.
+            // Akun disuspend tidak diterbitkan token (spec-admin §4.4).
+            if (($user['account_status'] ?? 'active') === 'suspended') {
+                Response::json([
+                    'suspended' => true,
+                    'reason' => $user['suspended_reason'] ?? null,
+                    'suspended_at' => $user['suspended_at'] ?? null,
+                ], 403, 'Akun kamu sedang disuspend.', false);
+            }
+
             $token = JWT::encode([
                 'id' => $user['id'],
             ]);
@@ -303,6 +312,17 @@ class AuthController
             $isMatch = password_verify($password, (string)$user['password']);
             if (!$isMatch) {
                 Response::json(null, 400, 'Password Salah', false);
+            }
+
+            // 3b. Akun disuspend: jangan terbitkan token. Client
+            // menampilkan layar pemberitahuan suspend + banding
+            // (spec-admin §4.4).
+            if (($user['account_status'] ?? 'active') === 'suspended') {
+                Response::json([
+                    'suspended' => true,
+                    'reason' => $user['suspended_reason'] ?? null,
+                    'suspended_at' => $user['suspended_at'] ?? null,
+                ], 403, 'Akun kamu sedang disuspend.', false);
             }
 
             // 4. Buat JWT token menggunakan utility JWT Phase 2A (HS256)

@@ -149,6 +149,7 @@ class InboxController
             $userId = self::userId();
             $conversationId = $params['id'] ?? '';
             self::requireParticipant($conversationId, $userId);
+            self::requireNotSystemThread($conversationId);
 
             $body = self::body();
             $text = trim((string) ($body['body'] ?? $body['text'] ?? ''));
@@ -168,6 +169,19 @@ class InboxController
         } catch (Throwable $e) {
             error_log('[INBOX SEND ERROR] ' . $e->getMessage());
             Response::json(null, 500, $e->getMessage(), false);
+        }
+    }
+
+    /**
+     * Thread sistem (kind = system) satu arah: user tidak bisa
+     * membalas, mute, pin, clear, atau delete (spec-admin §6).
+     * Mark-read tetap boleh.
+     */
+    private static function requireNotSystemThread(string $conversationId): void
+    {
+        $kind = InboxModel::kindOf(getDB(), $conversationId);
+        if ($kind === 'system') {
+            Response::json(null, 403, 'Thread ini satu arah.', false);
         }
     }
 
@@ -204,6 +218,7 @@ class InboxController
             $userId = self::userId();
             $conversationId = $params['id'] ?? '';
             self::requireParticipant($conversationId, $userId);
+            self::requireNotSystemThread($conversationId);
             $value = InboxModel::toggleFlag(getDB(), $conversationId, $userId, $flag);
             Response::json([$label => $value], 200, 'Updated', true);
         } catch (Throwable $e) {
@@ -219,6 +234,7 @@ class InboxController
             $userId = self::userId();
             $conversationId = $params['id'] ?? '';
             self::requireParticipant($conversationId, $userId);
+            self::requireNotSystemThread($conversationId);
             InboxModel::clearFor(getDB(), $conversationId, $userId);
             Response::json(null, 200, 'Chat cleared', true);
         } catch (Throwable $e) {
@@ -234,6 +250,7 @@ class InboxController
             $userId = self::userId();
             $conversationId = $params['id'] ?? '';
             self::requireParticipant($conversationId, $userId);
+            self::requireNotSystemThread($conversationId);
             InboxModel::hideFor(getDB(), $conversationId, $userId);
             Response::json(null, 200, 'Chat deleted', true);
         } catch (Throwable $e) {
@@ -249,6 +266,7 @@ class InboxController
             $userId = self::userId();
             $conversationId = $params['id'] ?? '';
             self::requireParticipant($conversationId, $userId);
+            self::requireNotSystemThread($conversationId);
             InboxModel::restoreFor(getDB(), $conversationId, $userId, true);
             Response::json(
                 InboxModel::summaryFor($conversationId, $userId),

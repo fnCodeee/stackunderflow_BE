@@ -51,6 +51,22 @@ class AuthMiddleware
         try {
             $decoded = JWT::decode($token);
             $GLOBALS['user'] = $decoded;
+
+            // Status akun dari DB: user yang disuspend kehilangan akses
+            // API (spec-admin §4.4); role ditempel untuk AdminMiddleware.
+            require_once BASE_PATH . '/models/UserModel.php';
+            $account = UserModel::findById((string) ($decoded['id'] ?? ''));
+            if ($account !== null) {
+                $GLOBALS['user']['role'] = $account['role'] ?? 'user';
+                $GLOBALS['user']['account_status'] = $account['account_status'] ?? 'active';
+                if (($account['account_status'] ?? 'active') === 'suspended') {
+                    Response::json([
+                        'suspended' => true,
+                        'reason' => $account['suspended_reason'] ?? null,
+                        'suspended_at' => $account['suspended_at'] ?? null,
+                    ], 403, 'Akun kamu sedang disuspend.', false);
+                }
+            }
         } catch (Throwable $e) {
             Response::json(null, 401, $e->getMessage(), false);
         }
