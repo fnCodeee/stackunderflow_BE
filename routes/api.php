@@ -26,6 +26,7 @@ require_once BASE_PATH . '/controllers/InboxController.php';
 require_once BASE_PATH . '/middlewares/AdminMiddleware.php';
 require_once BASE_PATH . '/controllers/ReportController.php';
 require_once BASE_PATH . '/controllers/AdminController.php';
+require_once BASE_PATH . '/controllers/AdminModerationController.php';
 
 // ── Health Check: GET / ───────────────────────────────────────────────────────
 $router->get('/', function (array $params): void {
@@ -184,3 +185,9 @@ $router->get('/api/admin/overview', [AdminMiddleware::class, 'handle'], [AdminCo
 $router->get('/api/admin/users', [AdminMiddleware::class, 'handle'], [AdminController::class, 'users']);
 $router->get('/api/admin/users/:id', [AdminMiddleware::class, 'handle'], [AdminController::class, 'userDetail']);
 $router->get('/api/admin/content/:type', [AdminMiddleware::class, 'handle'], [AdminController::class, 'content']);
+$router->post('/api/admin/actions', [AdminMiddleware::class, 'handle'], [AdminMiddleware::class, 'requireSuper'], [AdminModerationController::class, 'actions']);
+$router->post('/api/admin/action-requests', [AdminMiddleware::class, 'handle'], [AdminModerationController::class, 'createRequest']);
+$router->get('/api/admin/action-requests', [AdminMiddleware::class, 'handle'], [AdminModerationController::class, 'listRequests']);
+$router->post('/api/admin/action-requests/:id/decide', [AdminMiddleware::class, 'handle'], [AdminMiddleware::class, 'requireSuper'], [AdminModerationController::class, 'decide']);
+$router->get('/api/admin/reports', [AdminMiddleware::class, 'handle'], [AdminModerationController::class, 'reports']);
+$router->post('/api/admin/reports/:id/dismiss', [AdminMiddleware::class, 'handle'], [AdminMiddleware::class, 'requireSuper'], [AdminModerationController::class, 'dismissReport']);

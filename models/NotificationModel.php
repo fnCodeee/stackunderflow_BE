@@ -140,6 +140,26 @@ class NotificationModel
      *
      * @return array{id: string, user_id: string}|null
      */
+    /**
+     * Notifikasi admin (spec-admin \u00a77): pengajuan Monitor baru
+     * untuk Super Admin, dan hasil keputusan untuk pengaju. Tanpa
+     * dedupe \u2014 setiap kejadian adalah baris sendiri.
+     */
+    public static function createAdminNotification(string $recipientId, string $actorId, string $type, string $title, string $targetId): ?array
+    {
+        if ($recipientId === $actorId) {
+            return null;
+        }
+        $pdo = getDB();
+        $id = self::generateUuid();
+        $stmt = $pdo->prepare("
+            INSERT INTO notifications (id, user_id, actor_id, type, title, target_type, target_id)
+            VALUES (?, ?, ?, ?, ?, 'action_request', ?)
+        ");
+        $stmt->execute([$id, $recipientId, $actorId, $type, $title, $targetId]);
+        return self::findById($id);
+    }
+
     public static function findApplicationNotification(string $collabId, string $actorId): ?array
     {
         $pdo = getDB();
@@ -319,7 +339,7 @@ class NotificationModel
             'collabId' => $row['type'] === 'application' ? ($row['target_id'] ?? null) : null,
             'link' => $postId
                 ? '/dashboard/' . $postId
-                : ($row['type'] === 'application' ? '/inbox' : null),
+                : ($row['type'] === 'application' ? '/inbox' : (str_starts_with((string) $row['type'], 'admin_') ? '/admin/approvals' : null)),
         ];
     }
 

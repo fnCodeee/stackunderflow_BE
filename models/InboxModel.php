@@ -315,6 +315,7 @@ class InboxModel
             SELECT
                 c.id AS conversation_id,
                 c.application_id,
+                c.kind,
                 c.updated_at,
                 ou.id AS other_id,
                 ou.username AS other_username,
@@ -403,6 +404,7 @@ class InboxModel
                 'is_pinned' => (bool) $row['is_pinned'],
                 'updated_at' => $row['updated_at'],
                 'application' => $application,
+                'kind' => $row['kind'] ?? 'direct',
             ];
         }
         return $result;
