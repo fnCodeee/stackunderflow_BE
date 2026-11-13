@@ -265,6 +265,7 @@ class AuthController
             $responseData = [
                 'id'       => $user['id'],
                 'username' => $user['username'],
+                'role'     => $user['role'] ?? 'user',
                 'token'    => $token,
                 'email'    => $user['email'] ?? $email,
             ];
@@ -334,6 +335,7 @@ class AuthController
             $responseData = [
                 'id'       => $user['id'],
                 'username' => $user['username'],
+                'role'     => $user['role'] ?? 'user',
                 'token'    => $token,
             ];
 
@@ -382,6 +384,8 @@ class AuthController
             $responseData = [
                 'user_id'                 => $user['id'],
                 'username'                => $user['username'],
+                'role'                    => $user['role'] ?? 'user',
+                'account_status'          => $user['account_status'] ?? 'active',
                 'email'                   => $user['email'] ?? null,
                 'full_name'               => $profile['full_name'] ?? '',
                 'bio'                     => $profile['bio'] ?? '',

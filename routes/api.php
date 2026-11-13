@@ -181,3 +181,6 @@ $router->get('/api/users/:id', [OptionalAuthMiddleware::class, 'handle'], [UserC
 $router->post('/api/reports', [AuthMiddleware::class, 'handle'], [ReportController::class, 'create']);
 $router->delete('/api/reports/:id', [AuthMiddleware::class, 'handle'], [ReportController::class, 'withdraw']);
 $router->get('/api/admin/overview', [AdminMiddleware::class, 'handle'], [AdminController::class, 'overview']);
+$router->get('/api/admin/users', [AdminMiddleware::class, 'handle'], [AdminController::class, 'users']);
+$router->get('/api/admin/users/:id', [AdminMiddleware::class, 'handle'], [AdminController::class, 'userDetail']);
+$router->get('/api/admin/content/:type', [AdminMiddleware::class, 'handle'], [AdminController::class, 'content']);
