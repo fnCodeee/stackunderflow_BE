@@ -404,6 +404,8 @@ class ModerationService
                 $lines[] = '';
                 $lines[] = 'Note from the moderation team: ' . $note;
             }
+            $lines[] = '';
+            $lines[] = 'Please treat this as a warning: follow the community rules. Further violations may lead to another removal or a suspension.';
             self::sendSystemNotice($ownerId, implode("\n", $lines));
             return;
         }
