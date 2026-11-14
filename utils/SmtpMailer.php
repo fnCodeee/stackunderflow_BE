@@ -61,7 +61,7 @@ class SmtpMailer
             self::expect($fp, [220]);
             self::command($fp, 'EHLO underflow.local', [250]);
             self::command($fp, 'STARTTLS', [220]);
-            if (!stream_socket_enable_crypto($fp, STREAM_CRYPTO_METHOD_TLS_CLIENT)) {
+            if (!stream_socket_enable_crypto($fp, true, STREAM_CRYPTO_METHOD_TLS_CLIENT)) {
                 error_log('[SMTP] STARTTLS gagal');
                 return false;
             }
