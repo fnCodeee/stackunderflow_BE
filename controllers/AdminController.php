@@ -79,7 +79,8 @@ class AdminController
             Response::json($data, 200, 'OK', true);
         } catch (Throwable $e) {
             error_log('[ADMIN OVERVIEW ERROR] ' . $e->getMessage());
-            Response::json(null, 500, 'Internal Server error: ' . $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -98,7 +99,8 @@ class AdminController
             Response::json(self::envelope($result, $page, $limit), 200, 'OK', true);
         } catch (Throwable $e) {
             error_log('[ADMIN USERS ERROR] ' . $e->getMessage());
-            Response::json(null, 500, 'Internal Server error: ' . $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -113,7 +115,8 @@ class AdminController
             Response::json($detail, 200, 'OK', true);
         } catch (Throwable $e) {
             error_log('[ADMIN USER DETAIL ERROR] ' . $e->getMessage());
-            Response::json(null, 500, 'Internal Server error: ' . $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -136,7 +139,8 @@ class AdminController
             Response::json(self::envelope($result, $page, $limit), 200, 'OK', true);
         } catch (Throwable $e) {
             error_log('[ADMIN CONTENT ERROR] ' . $e->getMessage());
-            Response::json(null, 500, 'Internal Server error: ' . $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 }

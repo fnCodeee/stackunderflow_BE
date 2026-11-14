@@ -91,7 +91,8 @@ class PostController
 
             Response::json($result, 200, 'Postingan Berhasil dibuat', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -108,6 +109,30 @@ class PostController
         try {
             $userId = $GLOBALS['user']['id'] ?? null;
 
+            // Pagination opt-in (audit P0, 2026-11-14): tanpa parameter
+            // page/limit, respons tetap daftar penuh seperti kontrak
+            // lama (masih dipakai hydrator/poller); dengan parameter,
+            // server memotong per halaman + mengirim metadata
+            // pagination, pola yang sama dengan GET /api/collab.
+            $pageRaw = $_GET['page'] ?? null;
+            $limitRaw = $_GET['limit'] ?? null;
+            if ($pageRaw !== null || $limitRaw !== null) {
+                $page = $pageRaw !== null && filter_var($pageRaw, FILTER_VALIDATE_INT) !== false
+                    ? max(1, (int) $pageRaw)
+                    : 1;
+                $limit = $limitRaw !== null && filter_var($limitRaw, FILTER_VALIDATE_INT) !== false
+                    ? min(50, max(1, (int) $limitRaw))
+                    : 10;
+                $total = PostModel::countVisiblePosts();
+                $posts = PostModel::getAll($userId, $limit, ($page - 1) * $limit);
+                Response::json($posts, 200, 'Berhasil mendapatkan semua Postingan!', true, [
+                    'page' => $page,
+                    'limit' => $limit,
+                    'total' => $total,
+                    'total_pages' => (int) ceil($total / $limit),
+                ]);
+            }
+
             $posts = PostModel::getAll($userId);
 
             if (empty($posts)) {
@@ -116,7 +141,8 @@ class PostController
 
             Response::json($posts, 200, 'Berhasil mendapatkan semua Postingan!', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -151,7 +177,8 @@ class PostController
 
             Response::json($post, 200, 'Post Detail added!', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -186,7 +213,8 @@ class PostController
 
             Response::json(['view_count' => $viewCount], 200, 'View recorded', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -289,7 +317,8 @@ class PostController
 
             Response::json($result, 200, 'Berhasil diupdate!', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -339,7 +368,8 @@ class PostController
 
             Response::json($post, 200, 'Postingan Berhasil dihapus!', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -400,7 +430,8 @@ class PostController
 
             Response::json(null, 201, 'Post berhasil di-like', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -459,7 +490,8 @@ class PostController
 
             Response::json(null, 200, 'Like berhasil dihapus', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -530,7 +562,8 @@ class PostController
 
             Response::json($commentData, 200, 'Success create comment!', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -565,7 +598,8 @@ class PostController
 
             Response::json($comments, 200, 'Success get comments', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -628,7 +662,8 @@ class PostController
 
             Response::json($comment, 200, 'Comment berhasil dihapus!', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
     /**
@@ -689,7 +724,8 @@ class PostController
 
             Response::json(null, 201, 'Komentar berhasil di-like', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -749,7 +785,8 @@ class PostController
 
             Response::json(null, 200, 'Like komentar berhasil dihapus', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 }

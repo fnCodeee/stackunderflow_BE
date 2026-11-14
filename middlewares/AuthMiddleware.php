@@ -51,6 +51,14 @@ class AuthMiddleware
         try {
             $decoded = JWT::decode($token);
             $GLOBALS['user'] = $decoded;
+            $GLOBALS['auth_token'] = $token;
+
+            // Token yang sudah dicabut (logout / refresh) ditolak
+            // (audit P0, 2026-11-14).
+            require_once BASE_PATH . '/models/TokenRevocation.php';
+            if (TokenRevocation::isRevoked($token)) {
+                Response::json(null, 401, 'Sesi sudah berakhir. Silakan login lagi.', false);
+            }
 
             // Status akun dari DB: user yang disuspend kehilangan akses
             // API (spec-admin §4.4); role ditempel untuk AdminMiddleware.

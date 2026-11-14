@@ -132,7 +132,8 @@ class AdminModerationController
             Response::json(null, 400, $e->getMessage(), false);
         } catch (Throwable $e) {
             error_log('[ADMIN ACTIONS ERROR] ' . $e->getMessage());
-            Response::json(null, 500, 'Internal Server error: ' . $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -185,7 +186,8 @@ class AdminModerationController
             Response::json(['id' => $id], 201, 'Pengajuan terkirim.', true);
         } catch (Throwable $e) {
             error_log('[ADMIN CREATE REQUEST ERROR] ' . $e->getMessage());
-            Response::json(null, 500, 'Internal Server error: ' . $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -227,7 +229,8 @@ class AdminModerationController
             Response::json(['items' => $items], 200, 'OK', true);
         } catch (Throwable $e) {
             error_log('[ADMIN LIST REQUESTS ERROR] ' . $e->getMessage());
-            Response::json(null, 500, 'Internal Server error: ' . $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -296,7 +299,8 @@ class AdminModerationController
             Response::json(['id' => $id, 'status' => 'approved', 'action_id' => $result['action_id']], 200, 'Pengajuan disetujui dan dieksekusi.', true);
         } catch (Throwable $e) {
             error_log('[ADMIN DECIDE ERROR] ' . $e->getMessage());
-            Response::json(null, 500, 'Internal Server error: ' . $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -342,7 +346,8 @@ class AdminModerationController
             Response::json(['groups' => $groups], 200, 'OK', true);
         } catch (Throwable $e) {
             error_log('[ADMIN REPORTS ERROR] ' . $e->getMessage());
-            Response::json(null, 500, 'Internal Server error: ' . $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -364,7 +369,8 @@ class AdminModerationController
             Response::json(null, 400, $e->getMessage(), false);
         } catch (Throwable $e) {
             error_log('[ADMIN DISMISS ERROR] ' . $e->getMessage());
-            Response::json(null, 500, 'Internal Server error: ' . $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 }

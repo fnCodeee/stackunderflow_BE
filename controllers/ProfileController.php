@@ -194,7 +194,8 @@ class ProfileController
 
             Response::json($responseData, 200, 'Profile berhasil diperbarui!', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 }

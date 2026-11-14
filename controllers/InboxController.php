@@ -69,7 +69,8 @@ class InboxController
             Response::json(['unreadCount' => $total], 200, 'Inbox summary', true);
         } catch (Throwable $e) {
             error_log('[INBOX SUMMARY ERROR] ' . $e->getMessage());
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -81,7 +82,8 @@ class InboxController
             Response::json(InboxModel::listForUser($userId), 200, 'Conversations', true);
         } catch (Throwable $e) {
             error_log('[INBOX LIST ERROR] ' . $e->getMessage());
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -121,7 +123,8 @@ class InboxController
             );
         } catch (Throwable $e) {
             error_log('[INBOX CREATE ERROR] ' . $e->getMessage());
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -138,7 +141,8 @@ class InboxController
             Response::json(['messages' => $messages], 200, 'Messages', true);
         } catch (Throwable $e) {
             error_log('[INBOX MESSAGES ERROR] ' . $e->getMessage());
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -168,7 +172,8 @@ class InboxController
             Response::json(['message' => $message], 201, 'Message sent', true);
         } catch (Throwable $e) {
             error_log('[INBOX SEND ERROR] ' . $e->getMessage());
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -196,7 +201,8 @@ class InboxController
             Response::json(null, 200, 'Marked as read', true);
         } catch (Throwable $e) {
             error_log('[INBOX READ ERROR] ' . $e->getMessage());
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -223,7 +229,8 @@ class InboxController
             Response::json([$label => $value], 200, 'Updated', true);
         } catch (Throwable $e) {
             error_log('[INBOX FLAG ERROR] ' . $e->getMessage());
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -239,7 +246,8 @@ class InboxController
             Response::json(null, 200, 'Chat cleared', true);
         } catch (Throwable $e) {
             error_log('[INBOX CLEAR ERROR] ' . $e->getMessage());
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -255,7 +263,8 @@ class InboxController
             Response::json(null, 200, 'Chat deleted', true);
         } catch (Throwable $e) {
             error_log('[INBOX HIDE ERROR] ' . $e->getMessage());
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -276,7 +285,8 @@ class InboxController
             );
         } catch (Throwable $e) {
             error_log('[INBOX RESTORE ERROR] ' . $e->getMessage());
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 }

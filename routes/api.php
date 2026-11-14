@@ -60,6 +60,15 @@ $router->post('/api/auth/login', [AuthController::class, 'login']);
 // Google sign-in (ID token dari Google Identity Services)
 $router->post('/api/auth/google', [AuthController::class, 'google']);
 
+// Logout: cabut token aktif (audit P0, 2026-11-14)
+$router->post('/api/auth/logout', [AuthMiddleware::class, 'handle'], [AuthController::class, 'logout']);
+
+// Refresh: tukar token aktif dengan token baru; token lama dicabut
+$router->post('/api/auth/refresh', [AuthMiddleware::class, 'handle'], [AuthController::class, 'refresh']);
+
+// Ganti password: wajib login + password saat ini benar
+$router->put('/api/auth/change-password', [AuthMiddleware::class, 'handle'], [AuthController::class, 'changePassword']);
+
 // ── PROFILES MODULE ───────────────────────────────────────────────────────────
 // Phase 2D-1: Get My Profile
 $router->get('/api/profiles/me', [AuthMiddleware::class, 'handle'], [AuthController::class, 'me']);

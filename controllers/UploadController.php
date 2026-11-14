@@ -173,7 +173,8 @@ class UploadController
                 'public_id' => $publicId,
             ], 200, 'Gambar berhasil diunggah', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
     /** Batas penerbitan tanda tangan per user per jam (anti penyalahgunaan). */
@@ -281,7 +282,8 @@ class UploadController
                 'tags'       => $tags,
             ], 200, 'Tanda tangan upload diterbitkan', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 

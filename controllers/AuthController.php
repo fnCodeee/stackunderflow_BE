@@ -21,9 +21,17 @@ require_once BASE_PATH . '/models/ProfileSocialMediaModel.php';
 require_once BASE_PATH . '/models/UserSkillModel.php';
 require_once BASE_PATH . '/utils/Response.php';
 require_once BASE_PATH . '/utils/JWT.php';
+require_once BASE_PATH . '/utils/RateLimiter.php';
+require_once BASE_PATH . '/models/TokenRevocation.php';
 
 class AuthController
 {
+    /**
+     * Hash bcrypt dari string acak yang tidak dipakai siapa pun:
+     * diverifikasi saat username tidak ditemukan supaya waktu respons
+     * login mirip dan tidak membocorkan akun mana yang terdaftar.
+     */
+    private const DUMMY_PASSWORD_HASH = '$2y$10$5ETVqiue8DnWlDJiB7TS9.hcamoN.XjwoEjNeeCZjeogxVt2JDiPm';
     /**
      * Handler untuk POST /api/auth/register
      * Membuat akun user baru beserta inisialisasi default profile dalam 1 transaksi PDO.
@@ -34,6 +42,10 @@ class AuthController
     public static function register(array $params = []): void
     {
         try {
+            // Rate limit pendaftaran per IP: 10 percobaan/jam (audit P0).
+            if (!RateLimiter::hit('register-ip:' . RateLimiter::clientIp(), 10, 3600)) {
+                Response::json(null, 429, 'Terlalu banyak percobaan. Coba lagi nanti.', false);
+            }
             $body = $GLOBALS['body'] ?? [];
             if (empty($body)) {
                 $raw = file_get_contents('php://input');
@@ -114,7 +126,8 @@ class AuthController
 
             Response::json($responseData, 200, 'Akun Berhasil didaftarkan!!', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -135,6 +148,10 @@ class AuthController
     public static function google(array $params = []): void
     {
         try {
+            // Rate limit sign-in Google per IP: 30 percobaan/15 menit.
+            if (!RateLimiter::hit('google-ip:' . RateLimiter::clientIp(), 30, 900)) {
+                Response::json(null, 429, 'Terlalu banyak percobaan. Coba lagi nanti.', false);
+            }
             $body = $GLOBALS['body'] ?? [];
             if (empty($body)) {
                 $raw = file_get_contents('php://input');
@@ -273,7 +290,8 @@ class AuthController
             ];
             Response::json($responseData, 200, 'Yeayy.. Login Google Berhasil!', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, 'Internal Server error: ' . $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -305,17 +323,33 @@ class AuthController
                 Response::json(null, 400, 'Mohon Isi Seluruh Kolom!', false);
             }
 
-            // 2. Cari user berdasarkan username di database
-            $user = UserModel::findByUsername($username);
-            if ($user === null) {
-                Response::json(null, 404, 'Pengguna Tidak Ditemukan!', false);
+            // 2. Rate limit login (audit P0): bucket per IP+username
+            // (10 kegagalan/15 menit) dan per IP (30/15 menit) dicek
+            // sebelum menyentuh verifikasi password.
+            $clientIp = RateLimiter::clientIp();
+            $loginUserBucket = 'login-u:' . hash('sha256', $clientIp . '|' . strtolower($username));
+            $loginIpBucket = 'login-ip:' . $clientIp;
+            if (RateLimiter::blocked($loginUserBucket) || RateLimiter::blocked($loginIpBucket)) {
+                Response::json(null, 429, 'Terlalu banyak percobaan login. Coba lagi dalam beberapa menit.', false);
             }
 
-            // 3. Verifikasi password dengan password_verify() (mencegah plaintext compare)
-            $isMatch = password_verify($password, (string)$user['password']);
-            if (!$isMatch) {
-                Response::json(null, 400, 'Password Salah', false);
+            // 3. Cari user + verifikasi password. Kegagalan SELALU satu
+            // respons generik 401: membedakan "pengguna tidak ditemukan"
+            // dari "password salah" membocorkan username yang terdaftar
+            // (enumerasi akun). Hash dummy menjaga timing tetap mirip
+            // saat user tidak ada.
+            $user = UserModel::findByUsername($username);
+            $hashToCheck = $user !== null ? (string) $user['password'] : self::DUMMY_PASSWORD_HASH;
+            $isMatch = password_verify($password, $hashToCheck);
+            if ($user === null || !$isMatch) {
+                $userAllowed = RateLimiter::hit($loginUserBucket, 10, 900);
+                $ipAllowed = RateLimiter::hit($loginIpBucket, 30, 900);
+                if (!$userAllowed || !$ipAllowed) {
+                    Response::json(null, 429, 'Terlalu banyak percobaan login. Coba lagi dalam beberapa menit.', false);
+                }
+                Response::json(null, 401, 'Username atau password salah!', false);
             }
+            RateLimiter::clear($loginUserBucket);
 
             // 3b. Akun disuspend: jangan terbitkan token. Client
             // menampilkan layar pemberitahuan suspend + banding
@@ -348,7 +382,8 @@ class AuthController
 
             Response::json($responseData, 200, 'Yeayy.. Login Berhasil!', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, 'Internal Server error: ' . $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -400,7 +435,102 @@ class AuthController
 
             Response::json($responseData, 200, 'Berhasil Mendapatkan Data!', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
+        }
+    }
+
+    /**
+     * Handler untuk PUT /api/auth/change-password (audit P0, 2026-11-14).
+     * Wajib login; password saat ini harus benar; password baru
+     * minimal 8 karakter (aturan yang sama dengan register).
+     */
+    public static function changePassword(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $body = $GLOBALS['body'] ?? [];
+            if (empty($body)) {
+                $raw = file_get_contents('php://input');
+                if (!empty($raw)) {
+                    $decoded = json_decode($raw, true);
+                    if (is_array($decoded)) {
+                        $body = $decoded;
+                    }
+                }
+            }
+
+            $currentPassword = (string) ($body['current_password'] ?? '');
+            $newPassword = (string) ($body['new_password'] ?? '');
+            if ($currentPassword === '' || $newPassword === '') {
+                Response::json(null, 400, 'Mohon isi semua kolom!', false);
+            }
+            if (mb_strlen($newPassword) < 8) {
+                Response::json(null, 400, 'Password baru minimal 8 karakter.', false);
+            }
+
+            $user = UserModel::findById((string) $userId);
+            if ($user === null) {
+                Response::json(null, 404, 'User tidak ditemukan!', false);
+            }
+            if (!password_verify($currentPassword, (string) $user['password'])) {
+                Response::json(null, 400, 'Password saat ini salah.', false);
+            }
+
+            $newHash = password_hash($newPassword, PASSWORD_BCRYPT);
+            $stmt = getDB()->prepare('UPDATE users SET password = ? WHERE id = ?');
+            $stmt->execute([$newHash, (string) $userId]);
+
+            Response::json(null, 200, 'Password berhasil diubah.', true);
+        } catch (Throwable $e) {
+            error_log('[AUTH CHANGE PASSWORD ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server.', false);
+        }
+    }
+
+    /**
+     * Handler untuk POST /api/auth/logout (audit P0, 2026-11-14).
+     * Mencabut token aktif supaya tidak bisa dipakai lagi, bukan
+     * sekadar membuangnya di client.
+     */
+    public static function logout(array $params = []): void
+    {
+        try {
+            $token = (string) ($GLOBALS['auth_token'] ?? '');
+            if ($token !== '') {
+                TokenRevocation::revoke($token);
+            }
+            Response::json(null, 200, 'Berhasil logout.', true);
+        } catch (Throwable $e) {
+            error_log('[AUTH LOGOUT ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server.', false);
+        }
+    }
+
+    /**
+     * Handler untuk POST /api/auth/refresh (audit P0, 2026-11-14).
+     * Menukar token aktif dengan token baru; token lama dicabut.
+     */
+    public static function refresh(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+            $oldToken = (string) ($GLOBALS['auth_token'] ?? '');
+            if ($oldToken !== '') {
+                TokenRevocation::revoke($oldToken);
+            }
+            $token = JWT::encode(['id' => $userId]);
+            Response::json(['token' => $token], 200, 'Token diperbarui.', true);
+        } catch (Throwable $e) {
+            error_log('[AUTH REFRESH ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server.', false);
         }
     }
 }

@@ -1113,7 +1113,8 @@ class CollabController
             Response::json($collab, 200, 'Postingan kolaborasi berhasil dihapus!', true);
         } catch (Throwable $e) {
             error_log('[COLLAB DELETE ERROR] ' . $e->getMessage());
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -1197,7 +1198,8 @@ class CollabController
             );
         } catch (Throwable $e) {
             error_log('[COLLAB WITHDRAW ERROR] ' . $e->getMessage());
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 }

@@ -394,7 +394,7 @@ class PostModel
      * @param  string|null $currentUserId ID user yang sedang login (opsional) untuk mengecek is_liked
      * @return array<int, array<string, mixed>>
      */
-    public static function getAll(?string $currentUserId = null): array
+    public static function getAll(?string $currentUserId = null, ?int $limit = null, ?int $offset = null): array
     {
         $pdo = getDB();
 
@@ -418,7 +418,15 @@ class PostModel
             ORDER BY p.created_at DESC
         ";
 
-        $stmt = $pdo->query($sql);
+        if ($limit !== null) {
+            $sql .= ' LIMIT :__limit OFFSET :__offset';
+            $stmt = $pdo->prepare($sql);
+            $stmt->bindValue(':__limit', $limit, PDO::PARAM_INT);
+            $stmt->bindValue(':__offset', $offset ?? 0, PDO::PARAM_INT);
+            $stmt->execute();
+        } else {
+            $stmt = $pdo->query($sql);
+        }
         $posts = $stmt->fetchAll();
 
         if (empty($posts)) {
@@ -614,4 +622,13 @@ class PostModel
              $data[8] = chr(ord($data[8]) & 0x3f | 0x80); // variant RFC 4122
              return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
          }
-     }
+     
+    /** Jumlah post yang terlihat publik (metadata pagination feed). */
+    public static function countVisiblePosts(): int
+    {
+        $stmt = getDB()->query(
+            "SELECT COUNT(*) FROM public_posts WHERE deleted_at IS NULL AND moderation_state = 'visible'"
+        );
+        return (int) $stmt->fetchColumn();
+    }
+}

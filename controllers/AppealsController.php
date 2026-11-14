@@ -23,6 +23,7 @@ require_once BASE_PATH . '/models/UserModel.php';
 require_once BASE_PATH . '/models/NotificationModel.php';
 require_once BASE_PATH . '/utils/Realtime.php';
 require_once BASE_PATH . '/utils/Response.php';
+require_once BASE_PATH . '/utils/RateLimiter.php';
 
 class AppealsController
 {
@@ -131,15 +132,30 @@ class AppealsController
     {
         try {
             $body = self::body();
+            // Rate limit banding-suspend (audit P0): endpoint ini
+            // memverifikasi kredensial tanpa sesi, target empuk
+            // brute force. Bucket per IP+username 10/jam, per IP 30/jam.
+            $clientIp = RateLimiter::clientIp();
+            $appealBucket = 'appeal-u:' . hash('sha256', $clientIp . '|' . strtolower(trim((string) ($body['username'] ?? ''))));
+            $appealIpBucket = 'appeal-ip:' . $clientIp;
+            if (RateLimiter::blocked($appealBucket) || RateLimiter::blocked($appealIpBucket)) {
+                Response::json(null, 429, 'Terlalu banyak percobaan. Coba lagi nanti.', false);
+            }
             $message = trim((string) ($body['message'] ?? ''));
             if (mb_strlen($message) < 3) {
                 Response::json(null, 400, 'Jelaskan alasan bandingmu.', false);
             }
             $user = self::verifyCredentials($body);
             if ($user === null) {
+                $appealAllowed = RateLimiter::hit($appealBucket, 10, 3600);
+                $appealIpAllowed = RateLimiter::hit($appealIpBucket, 30, 3600);
+                if (!$appealAllowed || !$appealIpAllowed) {
+                    Response::json(null, 429, 'Terlalu banyak percobaan. Coba lagi nanti.', false);
+                }
                 // Sengaja generik: jangan bocorkan bagian mana yang salah.
                 Response::json(null, 401, 'Kredensial tidak valid.', false);
             }
+            RateLimiter::clear($appealBucket);
             if (($user['account_status'] ?? 'active') !== 'suspended') {
                 Response::json(null, 400, 'Akun ini tidak sedang disuspend.', false);
             }

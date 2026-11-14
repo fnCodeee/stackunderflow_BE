@@ -79,7 +79,8 @@ class ReportController
             Response::json(['report' => $report], 201, 'Laporan terkirim. Terima kasih!', true);
         } catch (Throwable $e) {
             error_log('[REPORT ERROR] ' . $e->getMessage());
-            Response::json(null, 500, 'Internal Server error: ' . $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -99,7 +100,8 @@ class ReportController
             Response::json(null, 200, 'Laporan ditarik.', true);
         } catch (Throwable $e) {
             error_log('[REPORT WITHDRAW ERROR] ' . $e->getMessage());
-            Response::json(null, 500, 'Internal Server error: ' . $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 }
