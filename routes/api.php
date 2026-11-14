@@ -64,6 +64,10 @@ $router->post('/api/auth/google', [AuthController::class, 'google']);
 $router->post('/api/auth/forgot-password', [AuthController::class, 'forgotPassword']);
 $router->post('/api/auth/reset-password', [AuthController::class, 'resetPassword']);
 
+// Verifikasi email: eksekusi dari link email (publik) + kirim ulang (login)
+$router->post('/api/auth/verify-email', [AuthController::class, 'verifyEmail']);
+$router->post('/api/auth/resend-verification', [AuthMiddleware::class, 'handle'], [AuthController::class, 'resendVerification']);
+
 // Logout: cabut token aktif (audit P0, 2026-11-14)
 $router->post('/api/auth/logout', [AuthMiddleware::class, 'handle'], [AuthController::class, 'logout']);
 

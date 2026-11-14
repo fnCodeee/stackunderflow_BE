@@ -24,6 +24,7 @@ require_once BASE_PATH . '/utils/JWT.php';
 require_once BASE_PATH . '/utils/RateLimiter.php';
 require_once BASE_PATH . '/models/TokenRevocation.php';
 require_once BASE_PATH . '/models/PasswordResetModel.php';
+require_once BASE_PATH . '/models/EmailVerificationModel.php';
 require_once BASE_PATH . '/utils/SmtpMailer.php';
 
 class AuthController
@@ -124,6 +125,21 @@ class AuthController
 
             if ($email !== '') {
                 $responseData['email'] = $newUser['email'] ?? $email;
+            }
+
+            $responseData['email_verified'] = false;
+
+            // Verifikasi email (mode lunak, 2026-11-14): akun baru
+            // yang mendaftar dengan email menerima link verifikasi.
+            // Kegagalan kirim TIDAK menggagalkan pendaftaran — user
+            // bisa minta kirim ulang dari banner di aplikasi.
+            if ($email !== '') {
+                try {
+                    $verifyToken = EmailVerificationModel::create((string) $newUser['id']);
+                    self::sendVerificationEmail($email, (string) $username, $verifyToken);
+                } catch (Throwable $mailError) {
+                    error_log('[REGISTER VERIFY EMAIL] ' . $mailError->getMessage());
+                }
             }
 
             Response::json($responseData, 200, 'Akun Berhasil didaftarkan!!', true);
@@ -269,6 +285,14 @@ class AuthController
                 Response::json(null, 403, 'Akun ini tidak aktif!', false);
             }
 
+            // 5b. Email Google sudah terbukti milik user oleh
+            // Google, jadi akun ini dianggap terverifikasi.
+            if (empty($user['email_verified_at'])) {
+                $stmt = getDB()->prepare('UPDATE users SET email_verified_at = ? WHERE id = ?');
+                $stmt->execute([date('Y-m-d H:i:s'), (string) $user['id']]);
+                $user['email_verified_at'] = date('Y-m-d H:i:s');
+            }
+
             // 6. Balas JWT yang sama seperti login biasa.
             // Akun disuspend tidak diterbitkan token (spec-admin §4.4).
             if (($user['account_status'] ?? 'active') === 'suspended') {
@@ -289,6 +313,7 @@ class AuthController
                 'role'     => $user['role'] ?? 'user',
                 'token'    => $token,
                 'email'    => $user['email'] ?? $email,
+                'email_verified' => true,
             ];
             Response::json($responseData, 200, 'Yeayy.. Login Google Berhasil!', true);
         } catch (Throwable $e) {
@@ -381,6 +406,7 @@ class AuthController
             if (isset($user['email']) && $user['email'] !== null) {
                 $responseData['email'] = $user['email'];
             }
+            $responseData['email_verified'] = !empty($user['email_verified_at']);
 
             Response::json($responseData, 200, 'Yeayy.. Login Berhasil!', true);
         } catch (Throwable $e) {
@@ -427,6 +453,7 @@ class AuthController
                 'role'                    => $user['role'] ?? 'user',
                 'account_status'          => $user['account_status'] ?? 'active',
                 'email'                   => $user['email'] ?? null,
+                'email_verified'          => !empty($user['email_verified_at']),
                 'full_name'               => $profile['full_name'] ?? '',
                 'bio'                     => $profile['bio'] ?? '',
                 'photo_profile_url'       => $profile['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
@@ -646,6 +673,105 @@ class AuthController
             Response::json(null, 200, 'Password berhasil direset. Silakan login dengan password baru.', true);
         } catch (Throwable $e) {
             error_log('[AUTH RESET PASSWORD ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server.', false);
+        }
+    }
+
+    /**
+     * Susun + kirim email verifikasi (dipakai register & resend).
+     * Mengembalikan hasil kirim dari SmtpMailer.
+     */
+    private static function sendVerificationEmail(string $email, string $username, string $token): bool
+    {
+        $base = trim((string) ($_ENV['FRONTEND_URL'] ?? ''));
+        if ($base === '') {
+            $base = 'http://localhost:3000';
+        }
+        $link = rtrim($base, '/') . '/verify-email?token=' . $token;
+        $text = "Halo @{$username},
+
+"
+            . "Selamat datang di Underflow! Klik link berikut untuk memverifikasi email kamu:
+
+{$link}
+
+"
+            . "Link berlaku 24 jam. Kalau kamu tidak merasa mendaftar, abaikan saja email ini.
+";
+        $html = '<p>Halo @' . htmlspecialchars($username, ENT_QUOTES, 'UTF-8') . ',</p>'
+            . '<p>Selamat datang di Underflow! Klik tombol berikut untuk memverifikasi email kamu:</p>'
+            . '<p><a href="' . htmlspecialchars($link, ENT_QUOTES, 'UTF-8') . '" '
+            . 'style="display:inline-block;background:#1e5128;color:#ffffff;padding:10px 18px;border-radius:9999px;text-decoration:none;font-weight:600">Verifikasi email</a></p>'
+            . '<p>Kalau tombol tidak bekerja, salin link ini ke browser:<br>'
+            . htmlspecialchars($link, ENT_QUOTES, 'UTF-8') . '</p>'
+            . '<p>Link berlaku 24 jam. Kalau kamu tidak merasa mendaftar, abaikan saja email ini.</p>';
+        return SmtpMailer::send($email, 'Verifikasi email Underflow kamu', $text, $html);
+    }
+
+    /**
+     * Handler untuk POST /api/auth/verify-email (2026-11-14).
+     * Menukar token dari link email menjadi status terverifikasi.
+     */
+    public static function verifyEmail(array $params = []): void
+    {
+        try {
+            $body = $GLOBALS['body'] ?? [];
+            if (empty($body)) {
+                $raw = file_get_contents('php://input');
+                if (!empty($raw)) {
+                    $decoded = json_decode($raw, true);
+                    if (is_array($decoded)) {
+                        $body = $decoded;
+                    }
+                }
+            }
+            $token = trim((string) ($body['token'] ?? ''));
+            $row = $token !== '' ? EmailVerificationModel::findValid($token) : null;
+            if ($row === null) {
+                Response::json(null, 400, 'Link verifikasi tidak valid atau sudah kedaluwarsa.', false);
+            }
+
+            $stmt = getDB()->prepare('UPDATE users SET email_verified_at = ? WHERE id = ?');
+            $stmt->execute([date('Y-m-d H:i:s'), (string) $row['user_id']]);
+            EmailVerificationModel::consume($row);
+
+            Response::json(null, 200, 'Email berhasil diverifikasi. Terima kasih!', true);
+        } catch (Throwable $e) {
+            error_log('[AUTH VERIFY EMAIL ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server.', false);
+        }
+    }
+
+    /**
+     * Handler untuk POST /api/auth/resend-verification (2026-11-14).
+     * Wajib login. Maksimal 3 kirim ulang per jam per akun.
+     */
+    public static function resendVerification(array $params = []): void
+    {
+        try {
+            $user = UserModel::findById((string) ($GLOBALS['user']['id'] ?? ''));
+            if ($user === null) {
+                Response::json(null, 404, 'User tidak ditemukan!', false);
+            }
+            $email = trim((string) ($user['email'] ?? ''));
+            if ($email === '') {
+                Response::json(null, 400, 'Akun ini tidak punya alamat email.', false);
+            }
+            if (!empty($user['email_verified_at'])) {
+                Response::json(null, 400, 'Email kamu sudah terverifikasi.', false);
+            }
+            if (!RateLimiter::hit('verify-resend:' . (string) $user['id'], 3, 3600)) {
+                Response::json(null, 429, 'Terlalu banyak percobaan. Coba lagi nanti.', false);
+            }
+
+            $token = EmailVerificationModel::create((string) $user['id']);
+            if (!self::sendVerificationEmail($email, (string) $user['username'], $token)) {
+                Response::json(null, 502, 'Gagal mengirim email. Coba lagi nanti.', false);
+            }
+
+            Response::json(null, 200, 'Email verifikasi sudah dikirim ulang.', true);
+        } catch (Throwable $e) {
+            error_log('[AUTH RESEND VERIFICATION ERROR] ' . $e->getMessage());
             Response::json(null, 500, 'Terjadi kesalahan pada server.', false);
         }
     }
