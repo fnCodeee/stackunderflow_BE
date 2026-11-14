@@ -60,6 +60,10 @@ $router->post('/api/auth/login', [AuthController::class, 'login']);
 // Google sign-in (ID token dari Google Identity Services)
 $router->post('/api/auth/google', [AuthController::class, 'google']);
 
+// Reset password: minta link (publik, respons selalu generik) + eksekusi reset
+$router->post('/api/auth/forgot-password', [AuthController::class, 'forgotPassword']);
+$router->post('/api/auth/reset-password', [AuthController::class, 'resetPassword']);
+
 // Logout: cabut token aktif (audit P0, 2026-11-14)
 $router->post('/api/auth/logout', [AuthMiddleware::class, 'handle'], [AuthController::class, 'logout']);
 

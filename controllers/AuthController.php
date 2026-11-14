@@ -23,6 +23,8 @@ require_once BASE_PATH . '/utils/Response.php';
 require_once BASE_PATH . '/utils/JWT.php';
 require_once BASE_PATH . '/utils/RateLimiter.php';
 require_once BASE_PATH . '/models/TokenRevocation.php';
+require_once BASE_PATH . '/models/PasswordResetModel.php';
+require_once BASE_PATH . '/utils/SmtpMailer.php';
 
 class AuthController
 {
@@ -530,6 +532,120 @@ class AuthController
             Response::json(['token' => $token], 200, 'Token diperbarui.', true);
         } catch (Throwable $e) {
             error_log('[AUTH REFRESH ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server.', false);
+        }
+    }
+
+    /**
+     * Handler untuk POST /api/auth/forgot-password (2026-11-14).
+     *
+     * Respons SELALU generik 200, apa pun status emailnya: membedakan
+     * "email terdaftar" dari "tidak terdaftar" membocorkan daftar
+     * akun (enumerasi). Rate limit per IP (10/jam) dan per email
+     * (5/jam) dihitung untuk SEMUA permintaan supaya limitnya sendiri
+     * tidak menjadi pembeda; saat limit terlewati, pengiriman diam-diam
+     * dilewati tapi respons tetap sama.
+     */
+    public static function forgotPassword(array $params = []): void
+    {
+        try {
+            $body = $GLOBALS['body'] ?? [];
+            if (empty($body)) {
+                $raw = file_get_contents('php://input');
+                if (!empty($raw)) {
+                    $decoded = json_decode($raw, true);
+                    if (is_array($decoded)) {
+                        $body = $decoded;
+                    }
+                }
+            }
+            $email = strtolower(trim((string) ($body['email'] ?? '')));
+
+            $ipAllowed = RateLimiter::hit('forgot-ip:' . RateLimiter::clientIp(), 10, 3600);
+            $emailAllowed = RateLimiter::hit('forgot-e:' . hash('sha256', $email), 5, 3600);
+
+            if ($email !== '' && $ipAllowed && $emailAllowed) {
+                $user = UserModel::findByEmail($email);
+                if ($user !== null) {
+                    $token = PasswordResetModel::create((string) $user['id']);
+                    $base = trim((string) ($_ENV['FRONTEND_URL'] ?? ''));
+                    if ($base === '') {
+                        $base = 'http://localhost:3000';
+                    }
+                    $link = rtrim($base, '/') . '/reset-password?token=' . $token;
+                    $username = (string) ($user['username'] ?? '');
+                    $text = "Halo @{$username},
+
+"
+                        . "Kami menerima permintaan untuk mengatur ulang password akun Underflow kamu.
+"
+                        . "Klik link berikut dalam 30 menit ke depan:
+
+{$link}
+
+"
+                        . "Kalau kamu tidak merasa meminta ini, abaikan saja email ini — password kamu tidak berubah.
+";
+                    $html = '<p>Halo @' . htmlspecialchars($username, ENT_QUOTES, 'UTF-8') . ',</p>'
+                        . '<p>Kami menerima permintaan untuk mengatur ulang password akun Underflow kamu. '
+                        . 'Klik tombol berikut dalam 30 menit ke depan:</p>'
+                        . '<p><a href="' . htmlspecialchars($link, ENT_QUOTES, 'UTF-8') . '" '
+                        . 'style="display:inline-block;background:#1e5128;color:#ffffff;padding:10px 18px;border-radius:9999px;text-decoration:none;font-weight:600">Atur ulang password</a></p>'
+                        . '<p>Kalau tombol tidak bekerja, salin link ini ke browser:<br>'
+                        . htmlspecialchars($link, ENT_QUOTES, 'UTF-8') . '</p>'
+                        . '<p>Kalau kamu tidak merasa meminta ini, abaikan saja email ini — password kamu tidak berubah.</p>';
+                    SmtpMailer::send($email, 'Atur ulang password Underflow kamu', $text, $html);
+                }
+            }
+
+            Response::json(null, 200, 'Jika email itu terdaftar, link reset sudah kami kirim. Link berlaku 30 menit.', true);
+        } catch (Throwable $e) {
+            error_log('[AUTH FORGOT PASSWORD ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server.', false);
+        }
+    }
+
+    /**
+     * Handler untuk POST /api/auth/reset-password (2026-11-14).
+     * Menukar token reset yang masih berlaku dengan password baru.
+     * Semua sesi lama dicabut lewat users.password_changed_at yang
+     * dicek AuthMiddleware.
+     */
+    public static function resetPassword(array $params = []): void
+    {
+        try {
+            $body = $GLOBALS['body'] ?? [];
+            if (empty($body)) {
+                $raw = file_get_contents('php://input');
+                if (!empty($raw)) {
+                    $decoded = json_decode($raw, true);
+                    if (is_array($decoded)) {
+                        $body = $decoded;
+                    }
+                }
+            }
+            $token = trim((string) ($body['token'] ?? ''));
+            $newPassword = (string) ($body['new_password'] ?? '');
+            if ($token === '' || $newPassword === '') {
+                Response::json(null, 400, 'Mohon isi semua kolom!', false);
+            }
+            if (mb_strlen($newPassword) < 8) {
+                Response::json(null, 400, 'Password baru minimal 8 karakter.', false);
+            }
+
+            $row = PasswordResetModel::findValid($token);
+            if ($row === null) {
+                Response::json(null, 400, 'Link reset tidak valid atau sudah kedaluwarsa.', false);
+            }
+
+            $newHash = password_hash($newPassword, PASSWORD_BCRYPT);
+            $stmt = getDB()->prepare('UPDATE users SET password = ?, password_changed_at = ? WHERE id = ?');
+            $stmt->execute([$newHash, time(), (string) $row['user_id']]);
+            PasswordResetModel::consume($row);
+
+            Response::json(null, 200, 'Password berhasil direset. Silakan login dengan password baru.', true);
+        } catch (Throwable $e) {
+            error_log('[AUTH RESET PASSWORD ERROR] ' . $e->getMessage());
             Response::json(null, 500, 'Terjadi kesalahan pada server.', false);
         }
     }

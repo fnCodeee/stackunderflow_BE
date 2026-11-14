@@ -67,6 +67,13 @@ class AuthMiddleware
             if ($account !== null) {
                 $GLOBALS['user']['role'] = $account['role'] ?? 'user';
                 $GLOBALS['user']['account_status'] = $account['account_status'] ?? 'active';
+                // Token yang diterbitkan sebelum password terakhir
+                // direset tidak berlaku lagi (reset = kemungkinan
+                // akun dikompromikan, semua sesi lama dicabut).
+                $passwordChangedAt = (int) ($account['password_changed_at'] ?? 0);
+                if ($passwordChangedAt > 0 && (int) ($decoded['iat'] ?? 0) < $passwordChangedAt) {
+                    Response::json(null, 401, 'Sesi sudah berakhir. Silakan login lagi.', false);
+                }
                 if (($account['account_status'] ?? 'active') === 'suspended') {
                     require_once BASE_PATH . '/models/AppealModel.php';
                     Response::json([
