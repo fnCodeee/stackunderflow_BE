@@ -38,6 +38,16 @@ class SmtpMailer
             return false;
         }
         $fp = null;
+        // Selama pengiriman, warning PHP (mis. koneksi SMTP gagal)
+        // tidak boleh tercetak ke body respons — respons API harus
+        // tetap JSON murni, kalau tidak client gagal membaca hasil
+        // register/forgot-password padahal prosesnya sendiri berhasil.
+        // Arahkan warning ke error_log; kegagalan kirim tetap
+        // menghasilkan false seperti sebelumnya.
+        set_error_handler(static function (int $severity, string $message): bool {
+            error_log('[SMTP] warning: ' . $message);
+            return true;
+        });
         try {
             $host = trim((string) ($_ENV['SMTP_HOST'] ?? '')) ?: 'smtp.gmail.com';
             $port = (int) (($_ENV['SMTP_PORT'] ?? '') ?: 587);
@@ -49,7 +59,7 @@ class SmtpMailer
                 "tcp://{$host}:{$port}",
                 $errno,
                 $errstr,
-                15,
+                8,
                 STREAM_CLIENT_CONNECT
             );
             if ($fp === false) {
@@ -102,6 +112,8 @@ class SmtpMailer
                 fclose($fp);
             }
             return false;
+        } finally {
+            restore_error_handler();
         }
     }
 
