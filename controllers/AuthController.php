@@ -24,7 +24,7 @@ require_once BASE_PATH . '/utils/JWT.php';
 require_once BASE_PATH . '/utils/RateLimiter.php';
 require_once BASE_PATH . '/models/TokenRevocation.php';
 require_once BASE_PATH . '/models/PasswordResetModel.php';
-require_once BASE_PATH . '/models/EmailVerificationModel.php';
+require_once BASE_PATH . '/models/PendingRegistrationModel.php';
 require_once BASE_PATH . '/utils/SmtpMailer.php';
 
 class AuthController
@@ -69,80 +69,77 @@ class AuthController
                 Response::json(null, 400, 'Mohon isi semua kolom!', false);
             }
 
-            // 2. Validasi duplikasi username
+            // 2. Email sekarang WAJIB: pendaftaran memakai skema
+            // pending (2026-11-16) — akun dibuat dari link verifikasi,
+            // jadi tanpa email pendaftaran tidak bisa diselesaikan.
+            if ($email === '') {
+                Response::json(null, 400, 'Mohon isi semua kolom!', false);
+            }
+
+            // 3. Validasi duplikasi username/email di tabel users
             $existingUser = UserModel::findByUsername($username);
             if ($existingUser !== null) {
                 Response::json(null, 400, 'Username tersebut telah terdaftar!', false);
             }
 
-            // Validasi duplikasi email jika email dikirim
-            if ($email !== '') {
-                $existingEmail = UserModel::findByEmail($email);
-                if ($existingEmail !== null) {
+            $existingEmail = UserModel::findByEmail($email);
+            if ($existingEmail !== null) {
+                Response::json(null, 400, 'Email tersebut telah terdaftar!', false);
+            }
+
+            // 4. Cek pendaftaran pending. Baris pending yang sudah
+            // kedaluwarsa dianggap tidak ada dan dibersihkan. Baris
+            // pending yang masih hidup MEMESAN username + email-nya:
+            // identitas yang sama persis (username DAN email cocok)
+            // berarti daftar ulang -> barisnya diperbarui; hanya
+            // salah satu yang cocok berarti bentrok dengan orang lain.
+            $pending = PendingRegistrationModel::findByUsername($username)
+                ?? PendingRegistrationModel::findByEmail($email);
+            if ($pending !== null && PendingRegistrationModel::isExpired($pending)) {
+                PendingRegistrationModel::deleteById((string) $pending['id']);
+                $pending = null;
+            }
+            if ($pending !== null) {
+                if ((string) $pending['username'] !== $username) {
                     Response::json(null, 400, 'Email tersebut telah terdaftar!', false);
                 }
+                if ((string) $pending['email'] !== $email) {
+                    Response::json(null, 400, 'Username tersebut telah terdaftar!', false);
+                }
             }
 
-            // 3. Hashing password secara aman dengan PASSWORD_BCRYPT
+            // 5. Simpan/perbarui baris pending. Password di-hash
+            // bcrypt sama seperti di tabel users; yang disimpan di
+            // baris pending adalah hash-nya, bukan teks aslinya.
             $hashedPassword = password_hash($password, PASSWORD_BCRYPT);
+            if ($pending !== null) {
+                $pendingId = (string) $pending['id'];
+                $verifyToken = PendingRegistrationModel::refresh($pending, $hashedPassword);
+            } else {
+                [$pendingRow, $verifyToken] = PendingRegistrationModel::create($username, $email, $hashedPassword);
+                $pendingId = (string) $pendingRow['id'];
+            }
 
-            // 4. Jalankan INSERT users dan profiles dalam satu Database Transaction
-            $pdo = getDB();
-            $pdo->beginTransaction();
-
+            // 6. Kirim email verifikasi. ATURAN PRODUK (2026-11-16):
+            // email tidak terkirim = pendaftaran BATAL. Baris pending
+            // dihapus dan user menerima pemberitahuan yang jelas —
+            // tidak ada akun setengah jadi yang menggantung.
+            $sent = false;
             try {
-                // A. Buat user
-                $newUser = UserModel::create([
-                    'username' => $username,
-                    'email'    => $email,
-                    'password' => $hashedPassword,
-                ]);
-
-                // B. Buat default profile untuk user yang baru dibuat
-                ProfileModel::create([
-                    'user_id'                 => $newUser['id'],
-                    'full_name'               => '',
-                    'bio'                     => '',
-                    'photo_profile_url'       => ProfileModel::DEFAULT_PHOTO_URL,
-                    'photo_profile_public_id' => '',
-                ]);
-
-                $pdo->commit();
-            } catch (Throwable $dbError) {
-                if ($pdo->inTransaction()) {
-                    $pdo->rollBack();
-                }
-                throw $dbError;
+                $sent = self::sendVerificationEmail($email, $username, $verifyToken);
+            } catch (Throwable $mailError) {
+                error_log('[REGISTER VERIFY EMAIL] ' . $mailError->getMessage());
+            }
+            if (!$sent) {
+                PendingRegistrationModel::deleteById($pendingId);
+                Response::json(null, 502, 'Email verifikasi tidak bisa dikirim saat ini. Pendaftaran dibatalkan, silakan coba lagi nanti.', false);
             }
 
-            // 5. Format response data (mengembalikan data user saja sesuai baseline Express)
-            $responseData = [
-                'id'         => $newUser['id'],
-                'username'   => $newUser['username'],
-                'is_active'  => (bool)($newUser['is_active'] ?? true),
-                'created_at' => $newUser['created_at'] ?? null,
-            ];
-
-            if ($email !== '') {
-                $responseData['email'] = $newUser['email'] ?? $email;
-            }
-
-            $responseData['email_verified'] = false;
-
-            // Verifikasi email (mode lunak, 2026-11-14): akun baru
-            // yang mendaftar dengan email menerima link verifikasi.
-            // Kegagalan kirim TIDAK menggagalkan pendaftaran — user
-            // bisa minta kirim ulang dari banner di aplikasi.
-            if ($email !== '') {
-                try {
-                    $verifyToken = EmailVerificationModel::create((string) $newUser['id']);
-                    self::sendVerificationEmail($email, (string) $username, $verifyToken);
-                } catch (Throwable $mailError) {
-                    error_log('[REGISTER VERIFY EMAIL] ' . $mailError->getMessage());
-                }
-            }
-
-            Response::json($responseData, 200, 'Akun Berhasil didaftarkan!!', true);
+            Response::json([
+                'pending'    => true,
+                'pending_id' => $pendingId,
+                'email'      => $email,
+            ], 200, 'Pendaftaran diterima! Cek email kamu untuk menyelesaikan pendaftaran.', true);
         } catch (Throwable $e) {
             error_log('[SERVER ERROR] ' . $e->getMessage());
             Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
@@ -366,6 +363,24 @@ class AuthController
             // (enumerasi akun). Hash dummy menjaga timing tetap mirip
             // saat user tidak ada.
             $user = UserModel::findByUsername($username);
+
+            // Skema pending (2026-11-16): pendaftaran yang belum
+            // diverifikasi belum menjadi baris users. Bila password
+            // yang diketik cocok dengan data pending, jawab terus
+            // terang bahwa akunnya menunggu verifikasi — jangan
+            // disamakan dengan kredensial salah. Password tidak
+            // cocok -> jatuh ke 401 generik seperti biasa.
+            if ($user === null) {
+                $pendingLogin = PendingRegistrationModel::findByUsername($username);
+                if ($pendingLogin !== null) {
+                    if (PendingRegistrationModel::isExpired($pendingLogin)) {
+                        PendingRegistrationModel::deleteById((string) $pendingLogin['id']);
+                    } elseif (password_verify($password, (string) $pendingLogin['password_hash'])) {
+                        Response::json(['email_not_verified' => true], 403, 'Akun kamu belum diverifikasi. Cek email untuk menyelesaikan pendaftaran.', false);
+                    }
+                }
+            }
+
             $hashToCheck = $user !== null ? (string) $user['password'] : self::DUMMY_PASSWORD_HASH;
             $isMatch = password_verify($password, $hashToCheck);
             if ($user === null || !$isMatch) {
@@ -709,8 +724,10 @@ class AuthController
     }
 
     /**
-     * Handler untuk POST /api/auth/verify-email (2026-11-14).
-     * Menukar token dari link email menjadi status terverifikasi.
+     * Handler untuk POST /api/auth/verify-email (skema pending,
+     * 2026-11-16). Menukar token dari link email menjadi AKUN
+     * BENERAN: baris pending dikonsumsi, baris users + profiles
+     * dibuat dalam satu transaksi, email langsung terverifikasi.
      */
     public static function verifyEmail(array $params = []): void
     {
@@ -726,16 +743,47 @@ class AuthController
                 }
             }
             $token = trim((string) ($body['token'] ?? ''));
-            $row = $token !== '' ? EmailVerificationModel::findValid($token) : null;
+            $row = $token !== '' ? PendingRegistrationModel::findValidByToken($token) : null;
             if ($row === null) {
                 Response::json(null, 400, 'Link verifikasi tidak valid atau sudah kedaluwarsa.', false);
             }
 
-            $stmt = getDB()->prepare('UPDATE users SET email_verified_at = ? WHERE id = ?');
-            $stmt->execute([date('Y-m-d H:i:s'), (string) $row['user_id']]);
-            EmailVerificationModel::consume($row);
+            // Bentrok menit terakhir (mis. akun Google dengan email
+            // yang sama dibuat selagi pendaftaran menunggu): jangan
+            // buat akun ganda, arahkan ke login.
+            if (UserModel::findByUsername((string) $row['username']) !== null
+                || UserModel::findByEmail((string) $row['email']) !== null) {
+                PendingRegistrationModel::deleteById((string) $row['id']);
+                Response::json(null, 409, 'Akun dengan username atau email ini sudah ada. Silakan login.', false);
+            }
 
-            Response::json(null, 200, 'Email berhasil diverifikasi. Terima kasih!', true);
+            $pdo = getDB();
+            $pdo->beginTransaction();
+            try {
+                $newUser = UserModel::create([
+                    'username' => (string) $row['username'],
+                    'email'    => (string) $row['email'],
+                    'password' => (string) $row['password_hash'],
+                ]);
+                ProfileModel::create([
+                    'user_id'                 => $newUser['id'],
+                    'full_name'               => '',
+                    'bio'                     => '',
+                    'photo_profile_url'       => ProfileModel::DEFAULT_PHOTO_URL,
+                    'photo_profile_public_id' => '',
+                ]);
+                $stmt = $pdo->prepare('UPDATE users SET email_verified_at = ? WHERE id = ?');
+                $stmt->execute([date('Y-m-d H:i:s'), (string) $newUser['id']]);
+                PendingRegistrationModel::deleteById((string) $row['id']);
+                $pdo->commit();
+            } catch (Throwable $dbError) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                throw $dbError;
+            }
+
+            Response::json(['username' => (string) $row['username']], 200, 'Email berhasil diverifikasi. Akun kamu sudah aktif, silakan login!', true);
         } catch (Throwable $e) {
             error_log('[AUTH VERIFY EMAIL ERROR] ' . $e->getMessage());
             Response::json(null, 500, 'Terjadi kesalahan pada server.', false);
@@ -743,35 +791,47 @@ class AuthController
     }
 
     /**
-     * Handler untuk POST /api/auth/resend-verification (2026-11-14).
-     * Wajib login. Maksimal 3 kirim ulang per jam per akun.
+     * Handler untuk POST /api/auth/resend-verification-pending
+     * (skema pending, 2026-11-16). Publik — pengenalnya adalah id
+     * baris pending (UUID acak, tidak bisa ditebak) yang diterima
+     * halaman signup saat pendaftaran. Maksimal 3 kirim ulang per
+     * jam per pendaftaran + 10 per jam per IP.
      */
-    public static function resendVerification(array $params = []): void
+    public static function resendVerificationPending(array $params = []): void
     {
         try {
-            $user = UserModel::findById((string) ($GLOBALS['user']['id'] ?? ''));
-            if ($user === null) {
-                Response::json(null, 404, 'User tidak ditemukan!', false);
+            $body = $GLOBALS['body'] ?? [];
+            if (empty($body)) {
+                $raw = file_get_contents('php://input');
+                if (!empty($raw)) {
+                    $decoded = json_decode($raw, true);
+                    if (is_array($decoded)) {
+                        $body = $decoded;
+                    }
+                }
             }
-            $email = trim((string) ($user['email'] ?? ''));
-            if ($email === '') {
-                Response::json(null, 400, 'Akun ini tidak punya alamat email.', false);
+            $pendingId = trim((string) ($body['pending_id'] ?? ''));
+            $row = $pendingId !== '' ? PendingRegistrationModel::findById($pendingId) : null;
+            if ($row === null) {
+                Response::json(null, 404, 'Pendaftaran tidak ditemukan. Silakan daftar ulang.', false);
             }
-            if (!empty($user['email_verified_at'])) {
-                Response::json(null, 400, 'Email kamu sudah terverifikasi.', false);
+            if (PendingRegistrationModel::isExpired($row)) {
+                PendingRegistrationModel::deleteById((string) $row['id']);
+                Response::json(null, 400, 'Pendaftaran sudah kedaluwarsa. Silakan daftar ulang.', false);
             }
-            if (!RateLimiter::hit('verify-resend:' . (string) $user['id'], 3, 3600)) {
+            if (!RateLimiter::hit('verify-resend-pending-ip:' . RateLimiter::clientIp(), 10, 3600)
+                || !RateLimiter::hit('verify-resend-pending:' . (string) $row['id'], 3, 3600)) {
                 Response::json(null, 429, 'Terlalu banyak percobaan. Coba lagi nanti.', false);
             }
 
-            $token = EmailVerificationModel::create((string) $user['id']);
-            if (!self::sendVerificationEmail($email, (string) $user['username'], $token)) {
+            $token = PendingRegistrationModel::rotateToken($row);
+            if (!self::sendVerificationEmail((string) $row['email'], (string) $row['username'], $token)) {
                 Response::json(null, 502, 'Gagal mengirim email. Coba lagi nanti.', false);
             }
 
             Response::json(null, 200, 'Email verifikasi sudah dikirim ulang.', true);
         } catch (Throwable $e) {
-            error_log('[AUTH RESEND VERIFICATION ERROR] ' . $e->getMessage());
+            error_log('[AUTH RESEND PENDING ERROR] ' . $e->getMessage());
             Response::json(null, 500, 'Terjadi kesalahan pada server.', false);
         }
     }
