@@ -51,6 +51,9 @@ class NotificationModel
      */
     public static function createLikeNotification(string $postId, string $ownerId, string $actorId): ?array
     {
+        if (!self::wants($ownerId, 'likes')) {
+            return null;
+        }
         if ($actorId === $ownerId) {
             return null;
         }
@@ -99,6 +102,9 @@ class NotificationModel
      */
     public static function createApplicationNotification(string $collabId, string $ownerId, string $actorId): ?array
     {
+        if (!self::wants($ownerId, 'applications')) {
+            return null;
+        }
         if ($actorId === $ownerId) {
             return null;
         }
@@ -201,6 +207,9 @@ class NotificationModel
      */
     public static function createCommentNotification(string $postId, string $commentId, string $ownerId, string $actorId): ?array
     {
+        if (!self::wants($ownerId, 'comments')) {
+            return null;
+        }
         if ($actorId === $ownerId) {
             return null;
         }
@@ -251,6 +260,9 @@ class NotificationModel
      */
     public static function createCommentLikeNotification(string $commentId, string $authorId, string $actorId): ?array
     {
+        if (!self::wants($authorId, 'likes')) {
+            return null;
+        }
         if ($actorId === $authorId) {
             return null;
         }
@@ -350,6 +362,49 @@ class NotificationModel
      * @param  string $id UUID notifikasi
      * @return array<string, mixed>|null Baris bentuk API, atau null kalau tidak ada
      */
+    /** Kategori preferensi notifikasi (audit P1 #14). */
+    public const PREF_KEYS = ['likes', 'comments', 'applications', 'collab_status'];
+
+    /**
+     * Preferensi notifikasi user; kategori tanpa baris berarti
+     * aktif (default nyala).
+     */
+    public static function preferencesFor(string $userId): array
+    {
+        $prefs = ['likes' => true, 'comments' => true, 'applications' => true, 'collab_status' => true];
+        $stmt = getDB()->prepare('SELECT pref_key, enabled FROM user_notification_preferences WHERE user_id = ?');
+        $stmt->execute([$userId]);
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            if (array_key_exists($row['pref_key'], $prefs)) {
+                $prefs[$row['pref_key']] = (bool) (int) $row['enabled'];
+            }
+        }
+        return $prefs;
+    }
+
+    public static function setPreference(string $userId, string $key, bool $enabled): void
+    {
+        $stmt = getDB()->prepare(
+            'INSERT INTO user_notification_preferences (user_id, pref_key, enabled) VALUES (?, ?, ?)
+             ON DUPLICATE KEY UPDATE enabled = VALUES(enabled)'
+        );
+        $stmt->execute([$userId, $key, $enabled ? 1 : 0]);
+    }
+
+    /** Apakah user mau menerima notifikasi kategori ini. */
+    private static function wants(string $userId, string $key): bool
+    {
+        static $cache = [];
+        $cacheKey = $userId . ':' . $key;
+        if (!array_key_exists($cacheKey, $cache)) {
+            $stmt = getDB()->prepare('SELECT enabled FROM user_notification_preferences WHERE user_id = ? AND pref_key = ?');
+            $stmt->execute([$userId, $key]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            $cache[$cacheKey] = $row === false ? true : (bool) (int) $row['enabled'];
+        }
+        return $cache[$cacheKey];
+    }
+
     public static function findApiRow(string $id): ?array
     {
         $pdo = getDB();
@@ -482,6 +537,9 @@ class NotificationModel
      */
     public static function createCollabStatusNotification(string $recipientId, string $actorId, string $type, string $title, string $collabId): ?array
     {
+        if (!self::wants($recipientId, 'collab_status')) {
+            return null;
+        }
         if ($recipientId === $actorId) {
             return null;
         }

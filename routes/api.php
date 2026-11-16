@@ -83,6 +83,9 @@ $router->get('/api/profiles/me', [AuthMiddleware::class, 'handle'], [AuthControl
 
 // Phase 2D-2: Update My Profile
 $router->put('/api/profiles/me', [AuthMiddleware::class, 'handle'], [ProfileController::class, 'updateProfile']);
+$router->get('/api/settings/notification-preferences', [AuthMiddleware::class, 'handle'], [ProfileController::class, 'getNotificationPreferences']);
+$router->put('/api/settings/notification-preferences', [AuthMiddleware::class, 'handle'], [ProfileController::class, 'updateNotificationPreferences']);
+$router->delete('/api/account', [AuthMiddleware::class, 'handle'], [ProfileController::class, 'deleteMyAccount']);
 
 // ── FEEDS / POST MODULE ───────────────────────────────────────────────────────
 // Phase 3B: Create Post

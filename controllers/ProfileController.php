@@ -13,6 +13,9 @@
 declare(strict_types=1);
 
 require_once BASE_PATH . '/models/ProfileModel.php';
+require_once BASE_PATH . '/models/UserModel.php';
+require_once BASE_PATH . '/models/NotificationModel.php';
+require_once BASE_PATH . '/models/AccountModel.php';
 require_once BASE_PATH . '/models/ProfileSocialMediaModel.php';
 require_once BASE_PATH . '/models/UserSkillModel.php';
 require_once BASE_PATH . '/utils/Response.php';
@@ -198,5 +201,120 @@ class ProfileController
             Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
+
+    /** Baca body JSON (global body atau php://input). */
+    private static function jsonBody(): array
+    {
+        $body = $GLOBALS['body'] ?? [];
+        if (empty($body)) {
+            $raw = file_get_contents('php://input');
+            if (!empty($raw)) {
+                $decoded = json_decode($raw, true);
+                if (is_array($decoded)) {
+                    $body = $decoded;
+                }
+            }
+        }
+        return is_array($body) ? $body : [];
+    }
+
+    /**
+     * Handler untuk GET /api/settings/notification-preferences
+     * (audit P1 #14).
+     */
+    public static function getNotificationPreferences(array $params = []): void
+    {
+        $userId = $GLOBALS['user']['id'] ?? null;
+
+        if (!$userId) {
+            Response::json(null, 401, 'Unauthorized', false);
+        }
+
+        Response::json(NotificationModel::preferencesFor($userId), 200, 'Preferensi notifikasi', true);
+    }
+
+    /**
+     * Handler untuk PUT /api/settings/notification-preferences
+     * (audit P1 #14). Body: subset dari
+     * {likes, comments, applications, collab_status} boolean.
+     */
+    public static function updateNotificationPreferences(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $body = self::jsonBody();
+            foreach (NotificationModel::PREF_KEYS as $key) {
+                if (array_key_exists($key, $body)) {
+                    if (!is_bool($body[$key])) {
+                        Response::json(null, 400, "Nilai $key harus boolean", false);
+                    }
+                    NotificationModel::setPreference($userId, $key, $body[$key]);
+                }
+            }
+
+            Response::json(NotificationModel::preferencesFor($userId), 200, 'Preferensi notifikasi tersimpan', true);
+        } catch (Throwable $e) {
+            error_log('[PROFILE ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat menyimpan preferensi', false);
+        }
+    }
+
+    /**
+     * Handler untuk DELETE /api/account (audit P1 #14).
+     * Konfirmasi: password saat ini (akun password) atau ketik
+     * username persis (akun Google). Akun yang masih memiliki
+     * proyek dengan member lain ditolak 409 — tidak ada fitur
+     * transfer owner, jadi proyeknya harus dihapus dulu.
+     */
+    public static function deleteMyAccount(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $user = UserModel::findById($userId);
+            if ($user === null) {
+                Response::json(null, 404, 'User tidak ditemukan', false);
+            }
+
+            $body = self::jsonBody();
+            if (!empty($user['google_id'])) {
+                $confirm = trim((string) ($body['confirm_username'] ?? ''));
+                if ($confirm !== (string) $user['username']) {
+                    Response::json(null, 400, 'Ketik username kamu persis untuk mengonfirmasi penghapusan akun', false);
+                }
+            } else {
+                $password = (string) ($body['password'] ?? '');
+                if ($password === '' || !password_verify($password, (string) $user['password'])) {
+                    Response::json(null, 400, 'Password salah', false);
+                }
+            }
+
+            $blocked = AccountModel::ownedProjectsWithOtherMembers($userId);
+            if ($blocked > 0) {
+                Response::json(
+                    ['blocked_projects' => $blocked],
+                    409,
+                    "Kamu masih pemilik $blocked proyek yang punya member lain. Hapus proyeknya dulu, baru akun bisa dihapus.",
+                    false
+                );
+            }
+
+            AccountModel::anonymizeAndPurge($userId, (string) $user['email']);
+            Response::json(['deleted' => true], 200, 'Akun terhapus', true);
+        } catch (Throwable $e) {
+            error_log('[PROFILE ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat menghapus akun', false);
+        }
+    }
+
 }
 
