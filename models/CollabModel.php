@@ -1445,4 +1445,64 @@ class CollabModel
         $data[8] = chr(ord($data[8]) & 0x3f | 0x80); // variant RFC 4122
         return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
     }
+
+    /**
+     * Semua lamaran yang menyangkut satu user (audit P1 #12):
+     * 'incoming' = lamaran ke proyek miliknya, 'outgoing' =
+     * lamarannya sendiri, 'all' = keduanya. Bentuk baris sejajar
+     * dengan listApplications + konteks proyek dan kedua pihak.
+     */
+    public static function listApplicationsForUser(string $userId, string $scope): array
+    {
+        $pdo = getDB();
+        $where = '(ca.user_id = ? OR c.user_id = ?)';
+        $params = [$userId, $userId];
+        if ($scope === 'incoming') {
+            $where = 'c.user_id = ?';
+            $params = [$userId];
+        } elseif ($scope === 'outgoing') {
+            $where = 'ca.user_id = ?';
+            $params = [$userId];
+        }
+        $stmt = $pdo->prepare(
+            "SELECT ca.id, ca.collab_id, ca.message, ca.status, ca.created_at,
+                    c.title AS project_title, c.due_date,
+                    ca.user_id AS applicant_id, au.username AS applicant_name, ap.photo_profile_url AS applicant_photo,
+                    c.user_id AS owner_id, ou.username AS owner_name, op.photo_profile_url AS owner_photo
+             FROM collaboration_applications ca
+             JOIN collaborations c ON c.id = ca.collab_id AND c.deleted_at IS NULL
+             JOIN users au ON au.id = ca.user_id
+             LEFT JOIN profiles ap ON ap.user_id = ca.user_id
+             JOIN users ou ON ou.id = c.user_id
+             LEFT JOIN profiles op ON op.user_id = c.user_id
+             WHERE $where
+             ORDER BY (ca.status = 'pending') DESC, ca.created_at DESC"
+        );
+        $stmt->execute($params);
+        $result = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $result[] = [
+                'id' => $row['id'],
+                'collab_id' => $row['collab_id'],
+                'project_title' => $row['project_title'] ?? '',
+                'due_date' => $row['due_date'],
+                'status' => self::mapApplicationStatus((string) $row['status']),
+                'direction' => (string) $row['applicant_id'] === $userId ? 'outgoing' : 'incoming',
+                'message' => $row['message'],
+                'created_at' => $row['created_at'],
+                'applicant' => [
+                    'id' => $row['applicant_id'],
+                    'username' => $row['applicant_name'] ?? '',
+                    'photo_profile_url' => $row['applicant_photo'] ?? ProfileModel::DEFAULT_PHOTO_URL,
+                ],
+                'owner' => [
+                    'id' => $row['owner_id'],
+                    'username' => $row['owner_name'] ?? '',
+                    'photo_profile_url' => $row['owner_photo'] ?? ProfileModel::DEFAULT_PHOTO_URL,
+                ],
+            ];
+        }
+        return $result;
+    }
+
 }

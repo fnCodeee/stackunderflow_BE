@@ -339,6 +339,33 @@ class CollabController
     }
 
     /**
+     * Handler untuk GET /api/applications?scope=incoming|outgoing|all
+     * (audit P1 #12) — daftar lamaran terpusat: yang masuk ke
+     * proyek saya dan yang saya kirim, dalam satu tempat.
+     */
+    public static function listMyApplications(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $scope = trim((string) ($_GET['scope'] ?? 'all'));
+            if (!in_array($scope, ['incoming', 'outgoing', 'all'], true)) {
+                $scope = 'all';
+            }
+
+            $applications = CollabModel::listApplicationsForUser($userId, $scope);
+            Response::json($applications, 200, 'Applications', true);
+        } catch (Throwable $e) {
+            error_log('[COLLAB ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat mengambil daftar lamaran', false);
+        }
+    }
+
+    /**
      * Handler untuk GET /api/my-collaborations/:id (audit P1 #15)
      * Satu proyek dari sudut pandang member yang login — bentuk
      * baris sama persis dengan versi daftarnya. 404 bila user

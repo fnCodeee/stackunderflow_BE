@@ -174,6 +174,7 @@ $router->delete('/api/collab/:id', [AuthMiddleware::class, 'handle'], [CollabCon
 // Batch 2: apply + membership (audit P1-3, P1-5)
 $router->post('/api/collab/:id/apply', [AuthMiddleware::class, 'handle'], [CollabController::class, 'applyToCollab']);
 $router->get('/api/collab/:id/applications', [AuthMiddleware::class, 'handle'], [CollabController::class, 'listApplications']);
+$router->get('/api/applications', [AuthMiddleware::class, 'handle'], [CollabController::class, 'listMyApplications']);
 $router->put('/api/collab/:id/applications/:applicationId/accept', [AuthMiddleware::class, 'handle'], [CollabController::class, 'acceptApplication']);
 $router->put('/api/collab/:id/applications/:applicationId/decline', [AuthMiddleware::class, 'handle'], [CollabController::class, 'declineApplication']);
 $router->delete('/api/collab/:id/apply', [AuthMiddleware::class, 'handle'], [CollabController::class, 'withdrawApplication']);
