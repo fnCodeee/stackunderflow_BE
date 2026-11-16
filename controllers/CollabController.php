@@ -339,6 +339,32 @@ class CollabController
     }
 
     /**
+     * Handler untuk GET /api/my-collaborations/:id (audit P1 #15)
+     * Satu proyek dari sudut pandang member yang login — bentuk
+     * baris sama persis dengan versi daftarnya. 404 bila user
+     * tidak terlibat di proyek itu.
+     */
+    public static function getMyCollaborationById(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $collab = CollabModel::getOneByMemberId($userId, (string) ($params['id'] ?? ''));
+            if ($collab === null) {
+                Response::json(null, 404, 'Collaboration not found', false);
+            }
+            Response::json($collab, 200, 'Your Collaboration!', true);
+        } catch (Throwable $e) {
+            error_log('[COLLAB ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat mengambil kolaborasi saya', false);
+        }
+    }
+
+    /**
      * Handler untuk PUT /api/collab/:id
      * Memperbarui postingan kolaborasi yang dibuat oleh user.
      *
@@ -884,6 +910,31 @@ class CollabController
         self::changeProjectProgress($params, false);
     }
 
+    /**
+     * Notifikasi status proyek (audit P1 #10) untuk semua member
+     * selain owner, lengkap dengan push realtime. Kegagalan di
+     * sini tidak boleh menggagalkan perubahan statusnya sendiri.
+     */
+    private static function notifyMembersOfStatusChange(string $collabId, string $ownerId, string $type, string $title): void
+    {
+        try {
+            $pdo = getDB();
+            $stmt = $pdo->prepare("SELECT user_id FROM user_collaboration WHERE collaboration_id = ?");
+            $stmt->execute([$collabId]);
+            foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $memberId) {
+                $notifRow = NotificationModel::createCollabStatusNotification((string) $memberId, $ownerId, $type, $title, $collabId);
+                if ($notifRow) {
+                    $apiRow = NotificationModel::findApiRow($notifRow['id']);
+                    if ($apiRow) {
+                        Realtime::publishNotification((string) $memberId, $apiRow);
+                    }
+                }
+            }
+        } catch (Throwable $e) {
+            error_log('[COLLAB STATUS NOTIF] ' . $e->getMessage());
+        }
+    }
+
     private static function changeProjectProgress(array $params, bool $complete): void
     {
         $pdo = getDB();
@@ -923,6 +974,22 @@ class CollabController
                     $pdo->rollBack();
                 }
                 throw $e;
+            }
+
+            try {
+                $metaStmt = getDB()->prepare("SELECT title FROM collaborations WHERE id = ?");
+                $metaStmt->execute([$collabId]);
+                $projectTitle = (string) ($metaStmt->fetchColumn() ?: 'Your project');
+                self::notifyMembersOfStatusChange(
+                    $collabId,
+                    (string) $userId,
+                    $complete ? 'collab_completed' : 'collab_reopened',
+                    $complete
+                        ? 'Marked "' . $projectTitle . '" complete'
+                        : 'Reopened "' . $projectTitle . '"'
+                );
+            } catch (Throwable $e) {
+                error_log('[COLLAB STATUS NOTIF] ' . $e->getMessage());
             }
 
             Response::json(
@@ -999,6 +1066,28 @@ class CollabController
                     $pdo->rollBack();
                 }
                 throw $e;
+            }
+
+            try {
+                $metaStmt = getDB()->prepare("SELECT title FROM collaborations WHERE id = ?");
+                $metaStmt->execute([$collabId]);
+                $projectTitle = (string) ($metaStmt->fetchColumn() ?: 'Your project');
+                $statusLabel = ['complete' => 'Complete', 'revise' => 'Revision needed', 'not-started' => 'Not started'][$status] ?? $status;
+                $notifRow = NotificationModel::createCollabStatusNotification(
+                    $memberId,
+                    (string) $userId,
+                    'member_status',
+                    'Set your status in "' . $projectTitle . '" to ' . $statusLabel,
+                    $collabId
+                );
+                if ($notifRow) {
+                    $apiRow = NotificationModel::findApiRow($notifRow['id']);
+                    if ($apiRow) {
+                        Realtime::publishNotification($memberId, $apiRow);
+                    }
+                }
+            } catch (Throwable $e) {
+                error_log('[COLLAB STATUS NOTIF] ' . $e->getMessage());
             }
 
             Response::json(['user_id' => $memberId, 'status' => $status], 200, 'Member status updated');

@@ -339,7 +339,7 @@ class NotificationModel
             'collabId' => $row['type'] === 'application' ? ($row['target_id'] ?? null) : null,
             'link' => $postId
                 ? '/dashboard/' . $postId
-                : ($row['type'] === 'application' ? '/inbox' : (str_starts_with((string) $row['type'], 'admin_') ? ((string) $row['type'] === 'admin_appeal' ? '/admin/appeals' : '/admin/approvals') : null)),
+                : ($row['type'] === 'application' ? '/inbox' : (in_array($row['type'], ['collab_completed', 'collab_reopened', 'member_status'], true) ? '/collaborations/' . $row['target_id'] : (str_starts_with((string) $row['type'], 'admin_') ? ((string) $row['type'] === 'admin_appeal' ? '/admin/appeals' : '/admin/approvals') : null))),
         ];
     }
 
@@ -472,4 +472,39 @@ class NotificationModel
         $data[8] = chr(ord($data[8]) & 0x3f | 0x80); // variant RFC 4122
         return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
     }
+
+    /**
+     * Notifikasi perubahan status proyek (audit P1 #10): proyek
+     * ditandai selesai / dibuka lagi oleh owner, atau status kerja
+     * seorang member diubah owner. Satu baris belum-dibaca per
+     * (penerima, tipe, proyek) — kejadian berikutnya me-refresh
+     * baris yang sama (judul + waktu) alih-alih menumpuk duplikat.
+     */
+    public static function createCollabStatusNotification(string $recipientId, string $actorId, string $type, string $title, string $collabId): ?array
+    {
+        if ($recipientId === $actorId) {
+            return null;
+        }
+
+        $pdo = getDB();
+
+        $stmt = $pdo->prepare("SELECT * FROM notifications WHERE user_id = ? AND target_id = ? AND type = ? AND is_read = 0 LIMIT 1");
+        $stmt->execute([$recipientId, $collabId, $type]);
+        $existing = $stmt->fetch();
+        if ($existing) {
+            $pdo->prepare("UPDATE notifications SET title = ?, actor_id = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?")
+                ->execute([$title, $actorId, $existing['id']]);
+            return self::findById($existing['id']);
+        }
+
+        $id = self::generateUuid();
+        $stmt = $pdo->prepare("
+            INSERT INTO notifications (id, user_id, actor_id, type, title, target_type, target_id)
+            VALUES (?, ?, ?, ?, ?, 'collaboration', ?)
+        ");
+        $stmt->execute([$id, $recipientId, $actorId, $type, $title, $collabId]);
+
+        return self::findById($id);
+    }
+
 }

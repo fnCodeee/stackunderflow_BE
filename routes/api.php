@@ -161,6 +161,7 @@ $router->get('/api/profiles/:userId/collab', [AuthMiddleware::class, 'handle'], 
 // My Collaborations board (added 2026-11-10): the current user's
 // collabs with myStatus.
 $router->get('/api/my-collaborations', [AuthMiddleware::class, 'handle'], [CollabController::class, 'getMyCollaborations']);
+$router->get('/api/my-collaborations/:id', [AuthMiddleware::class, 'handle'], [CollabController::class, 'getMyCollaborationById']);
 
 // Phase 4E: Update Collaboration (auth required — sesuai Express baseline)
 $router->put('/api/collab/:id', [AuthMiddleware::class, 'handle'], [CollabController::class, 'updateCollab']);

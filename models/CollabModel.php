@@ -543,6 +543,17 @@ class CollabModel
             return [];
         }
 
+        return self::enrichMemberCollabs($collabs);
+    }
+
+    /**
+     * Enrichment bersama untuk baris-baris getByMemberId:
+     * skills, jumlah + daftar member, dan media per collab.
+     */
+    private static function enrichMemberCollabs(array $collabs): array
+    {
+        $pdo = getDB();
+
         $collabIds = array_column($collabs, 'id');
         $placeholders = implode(',', array_fill(0, count($collabIds), '?'));
 
@@ -652,6 +663,55 @@ class CollabModel
         }
 
         return $result;
+    }
+
+    /**
+     * Satu proyek untuk GET /api/my-collaborations/:id (audit
+     * P1 #15): query yang sama dengan getByMemberId tetapi
+     * difilter ke satu collab; null bila user tidak terlibat.
+     */
+    public static function getOneByMemberId(string $userId, string $collabId): ?array
+    {
+        $pdo = getDB();
+
+        $sql = "
+            SELECT
+                c.id,
+                c.user_id,
+                c.title,
+                c.description,
+                c.type,
+                c.due_date,
+                c.required_member,
+                c.status,
+                c.created_at,
+                CASE
+                    WHEN uc.status IS NOT NULL THEN uc.status
+                    WHEN ca.id IS NOT NULL THEN 'pending'
+                    ELSE 'not-started'
+                END AS my_status,
+                u.username,
+                pr.photo_profile_url
+            FROM collaborations c
+            LEFT JOIN user_collaboration uc
+                ON uc.collaboration_id = c.id AND uc.user_id = ?
+            LEFT JOIN collaboration_applications ca
+                ON ca.collab_id = c.id AND ca.user_id = ? AND ca.status = 'pending'
+            LEFT JOIN users u ON c.user_id = u.id
+            LEFT JOIN profiles pr ON pr.user_id = pr.user_id
+            WHERE c.deleted_at IS NULL AND moderation_state = 'visible' AND (c.user_id = ? OR uc.user_id = ? OR ca.id IS NOT NULL) AND c.id = ?
+        ";
+
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([$userId, $userId, $userId, $userId, $collabId]);
+        $collabs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if (empty($collabs)) {
+            return null;
+        }
+
+        $enriched = self::enrichMemberCollabs($collabs);
+        return $enriched[0] ?? null;
     }
 
     /**
