@@ -47,7 +47,7 @@ class AuthController
         try {
             // Rate limit pendaftaran per IP: 10 percobaan/jam (audit P0).
             if (!RateLimiter::hit('register-ip:' . RateLimiter::clientIp(), 10, 3600)) {
-                Response::json(null, 429, 'Terlalu banyak percobaan. Coba lagi nanti.', false);
+                Response::json(null, 429, 'Terlalu banyak percobaan. Coba lagi nanti.', false, null, 'rate_limited');
             }
             $body = $GLOBALS['body'] ?? [];
             if (empty($body)) {
@@ -66,25 +66,25 @@ class AuthController
 
             // 1. Validasi field wajib
             if ($username === '' || $password === '') {
-                Response::json(null, 400, 'Mohon isi semua kolom!', false);
+                Response::json(null, 400, 'Mohon isi semua kolom!', false, null, 'validation_error');
             }
 
             // 2. Email sekarang WAJIB: pendaftaran memakai skema
             // pending (2026-11-16) — akun dibuat dari link verifikasi,
             // jadi tanpa email pendaftaran tidak bisa diselesaikan.
             if ($email === '') {
-                Response::json(null, 400, 'Mohon isi semua kolom!', false);
+                Response::json(null, 400, 'Mohon isi semua kolom!', false, null, 'validation_error');
             }
 
             // 3. Validasi duplikasi username/email di tabel users
             $existingUser = UserModel::findByUsername($username);
             if ($existingUser !== null) {
-                Response::json(null, 400, 'Username tersebut telah terdaftar!', false);
+                Response::json(null, 409, 'Username tersebut telah terdaftar!', false, null, 'username_taken');
             }
 
             $existingEmail = UserModel::findByEmail($email);
             if ($existingEmail !== null) {
-                Response::json(null, 400, 'Email tersebut telah terdaftar!', false);
+                Response::json(null, 409, 'Email tersebut telah terdaftar!', false, null, 'email_taken');
             }
 
             // 4. Cek pendaftaran pending. Baris pending yang sudah
@@ -101,10 +101,10 @@ class AuthController
             }
             if ($pending !== null) {
                 if ((string) $pending['username'] !== $username) {
-                    Response::json(null, 400, 'Email tersebut telah terdaftar!', false);
+                    Response::json(null, 409, 'Email tersebut telah terdaftar!', false, null, 'email_taken');
                 }
                 if ((string) $pending['email'] !== $email) {
-                    Response::json(null, 400, 'Username tersebut telah terdaftar!', false);
+                    Response::json(null, 409, 'Username tersebut telah terdaftar!', false, null, 'username_taken');
                 }
             }
 
@@ -132,14 +132,14 @@ class AuthController
             }
             if (!$sent) {
                 PendingRegistrationModel::deleteById($pendingId);
-                Response::json(null, 502, 'Email verifikasi tidak bisa dikirim saat ini. Pendaftaran dibatalkan, silakan coba lagi nanti.', false);
+                Response::json(null, 502, 'Email verifikasi tidak bisa dikirim saat ini. Pendaftaran dibatalkan, silakan coba lagi nanti.', false, null, 'email_send_failed');
             }
 
             Response::json([
                 'pending'    => true,
                 'pending_id' => $pendingId,
                 'email'      => $email,
-            ], 200, 'Pendaftaran diterima! Cek email kamu untuk menyelesaikan pendaftaran.', true);
+            ], 201, 'Pendaftaran diterima! Cek email kamu untuk menyelesaikan pendaftaran.', true);
         } catch (Throwable $e) {
             error_log('[SERVER ERROR] ' . $e->getMessage());
             Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
@@ -354,7 +354,7 @@ class AuthController
             $loginUserBucket = 'login-u:' . hash('sha256', $clientIp . '|' . strtolower($username));
             $loginIpBucket = 'login-ip:' . $clientIp;
             if (RateLimiter::blocked($loginUserBucket) || RateLimiter::blocked($loginIpBucket)) {
-                Response::json(null, 429, 'Terlalu banyak percobaan login. Coba lagi dalam beberapa menit.', false);
+                Response::json(null, 429, 'Terlalu banyak percobaan login. Coba lagi dalam beberapa menit.', false, null, 'rate_limited');
             }
 
             // 3. Cari user + verifikasi password. Kegagalan SELALU satu
@@ -376,7 +376,7 @@ class AuthController
                     if (PendingRegistrationModel::isExpired($pendingLogin)) {
                         PendingRegistrationModel::deleteById((string) $pendingLogin['id']);
                     } elseif (password_verify($password, (string) $pendingLogin['password_hash'])) {
-                        Response::json(['email_not_verified' => true], 403, 'Akun kamu belum diverifikasi. Cek email untuk menyelesaikan pendaftaran.', false);
+                        Response::json(['email_not_verified' => true], 403, 'Akun kamu belum diverifikasi. Cek email untuk menyelesaikan pendaftaran.', false, null, 'email_not_verified');
                     }
                 }
             }
@@ -387,9 +387,9 @@ class AuthController
                 $userAllowed = RateLimiter::hit($loginUserBucket, 10, 900);
                 $ipAllowed = RateLimiter::hit($loginIpBucket, 30, 900);
                 if (!$userAllowed || !$ipAllowed) {
-                    Response::json(null, 429, 'Terlalu banyak percobaan login. Coba lagi dalam beberapa menit.', false);
+                    Response::json(null, 429, 'Terlalu banyak percobaan login. Coba lagi dalam beberapa menit.', false, null, 'rate_limited');
                 }
-                Response::json(null, 401, 'Username atau password salah!', false);
+                Response::json(null, 401, 'Username atau password salah!', false, null, 'invalid_credentials');
             }
             RateLimiter::clear($loginUserBucket);
 
@@ -522,7 +522,7 @@ class AuthController
                 Response::json(null, 404, 'User tidak ditemukan!', false);
             }
             if (!password_verify($currentPassword, (string) $user['password'])) {
-                Response::json(null, 400, 'Password saat ini salah.', false);
+                Response::json(null, 400, 'Password saat ini salah.', false, null, 'wrong_password');
             }
 
             $newHash = password_hash($newPassword, PASSWORD_BCRYPT);

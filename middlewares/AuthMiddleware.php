@@ -36,13 +36,13 @@ class AuthMiddleware
 
         // 1. Validasi keberadaan header Authorization
         if ($authHeader === null || trim($authHeader) === '') {
-            Response::json(null, 403, 'Token Tidak Tersedia!', false);
+            Response::json(null, 401, 'Token Tidak Tersedia!', false, null, 'unauthorized');
         }
 
         // 2. Validasi format Bearer token
         $parts = explode(' ', trim($authHeader), 2);
         if (count($parts) !== 2 || strtolower($parts[0]) !== 'bearer' || trim($parts[1]) === '') {
-            Response::json(null, 403, 'Token Tidak Tersedia', false);
+            Response::json(null, 401, 'Token Tidak Tersedia', false, null, 'unauthorized');
         }
 
         $token = trim($parts[1]);
@@ -57,7 +57,7 @@ class AuthMiddleware
             // (audit P0, 2026-11-14).
             require_once BASE_PATH . '/models/TokenRevocation.php';
             if (TokenRevocation::isRevoked($token)) {
-                Response::json(null, 401, 'Sesi sudah berakhir. Silakan login lagi.', false);
+                Response::json(null, 401, 'Sesi sudah berakhir. Silakan login lagi.', false, null, 'unauthorized');
             }
 
             // Status akun dari DB: user yang disuspend kehilangan akses
@@ -72,7 +72,7 @@ class AuthMiddleware
                 // akun dikompromikan, semua sesi lama dicabut).
                 $passwordChangedAt = (int) ($account['password_changed_at'] ?? 0);
                 if ($passwordChangedAt > 0 && (int) ($decoded['iat'] ?? 0) < $passwordChangedAt) {
-                    Response::json(null, 401, 'Sesi sudah berakhir. Silakan login lagi.', false);
+                    Response::json(null, 401, 'Sesi sudah berakhir. Silakan login lagi.', false, null, 'unauthorized');
                 }
                 if (($account['account_status'] ?? 'active') === 'suspended') {
                     require_once BASE_PATH . '/models/AppealModel.php';
@@ -81,11 +81,11 @@ class AuthMiddleware
                         'reason' => $account['suspended_reason'] ?? null,
                         'suspended_at' => $account['suspended_at'] ?? null,
                         'appeal' => AppealModel::suspendAppealInfo((string) ($account['id'] ?? $decoded['id'] ?? '')),
-                    ], 403, 'Akun kamu sedang disuspend.', false);
+                    ], 403, 'Akun kamu sedang disuspend.', false, null, 'account_suspended');
                 }
             }
         } catch (Throwable $e) {
-            Response::json(null, 401, $e->getMessage(), false);
+            Response::json(null, 401, $e->getMessage(), false, null, 'unauthorized');
         }
     }
 

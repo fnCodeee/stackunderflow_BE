@@ -53,7 +53,8 @@ class Response
         int    $statusCode = 200,
         string $message    = '',
         bool   $success    = true,
-        ?array $pagination = null
+        ?array $pagination = null,
+        ?string $errorCode = null
     ): never {
         http_response_code($statusCode);
         header('Content-Type: application/json; charset=utf-8');
@@ -65,6 +66,11 @@ class Response
         ];
         if ($pagination !== null) {
             $payload['pagination'] = $pagination;
+        }
+        if ($errorCode !== null) {
+            // Kode error mesin (audit P1 #17): frontend menerjemahkan
+            // kode ini; `message` tetap ada sebagai fallback.
+            $payload['code'] = $errorCode;
         }
 
         echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

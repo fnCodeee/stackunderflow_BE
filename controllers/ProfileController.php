@@ -289,12 +289,12 @@ class ProfileController
             if (!empty($user['google_id'])) {
                 $confirm = trim((string) ($body['confirm_username'] ?? ''));
                 if ($confirm !== (string) $user['username']) {
-                    Response::json(null, 400, 'Ketik username kamu persis untuk mengonfirmasi penghapusan akun', false);
+                    Response::json(null, 400, 'Ketik username kamu persis untuk mengonfirmasi penghapusan akun', false, null, 'validation_error');
                 }
             } else {
                 $password = (string) ($body['password'] ?? '');
                 if ($password === '' || !password_verify($password, (string) $user['password'])) {
-                    Response::json(null, 400, 'Password salah', false);
+                    Response::json(null, 400, 'Password salah', false, null, 'wrong_password');
                 }
             }
 
@@ -304,7 +304,9 @@ class ProfileController
                     ['blocked_projects' => $blocked],
                     409,
                     "Kamu masih pemilik $blocked proyek yang punya member lain. Hapus proyeknya dulu, baru akun bisa dihapus.",
-                    false
+                    false,
+                    null,
+                    'account_delete_blocked'
                 );
             }
 
