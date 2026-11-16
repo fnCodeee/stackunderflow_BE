@@ -783,7 +783,20 @@ class AuthController
                 throw $dbError;
             }
 
-            Response::json(['username' => (string) $row['username']], 200, 'Email berhasil diverifikasi. Akun kamu sudah aktif, silakan login!', true);
+            // Klik link = bukti kepemilikan inbox, jadi terbitkan
+            // sesi langsung (payload sama seperti login): user
+            // masuk ke feed tanpa login ulang.
+            $sessionToken = JWT::encode([
+                'id' => (string) $newUser['id'],
+            ]);
+            Response::json([
+                'id'             => (string) $newUser['id'],
+                'username'       => (string) $row['username'],
+                'role'           => $newUser['role'] ?? 'user',
+                'token'          => $sessionToken,
+                'email'          => (string) $row['email'],
+                'email_verified' => true,
+            ], 200, 'Email berhasil diverifikasi. Akun kamu sudah aktif!', true);
         } catch (Throwable $e) {
             error_log('[AUTH VERIFY EMAIL ERROR] ' . $e->getMessage());
             Response::json(null, 500, 'Terjadi kesalahan pada server.', false);
