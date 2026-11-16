@@ -256,4 +256,118 @@ class AdminModel
         $stmt->execute();
         return $stmt->fetchAll();
     }
+
+    /** Audit log (spec 7.7): the full moderation_actions table
+     * with actor / owner / requester names resolved. */
+    public static function listAuditLog(string $actionType, string $targetType, string $actorId, int $page, int $limit): array
+    {
+        $pdo = getDB();
+        $where = [];
+        $args = [];
+        if ($actionType !== '') {
+            $where[] = 'ma.action_type = ?';
+            $args[] = $actionType;
+        }
+        if ($targetType !== '') {
+            $where[] = 'ma.target_type = ?';
+            $args[] = $targetType;
+        }
+        if ($actorId !== '') {
+            $where[] = 'ma.actor_id = ?';
+            $args[] = $actorId;
+        }
+        $whereSql = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
+
+        $countStmt = $pdo->prepare("SELECT COUNT(*) FROM moderation_actions ma $whereSql");
+        $countStmt->execute($args);
+        $total = (int) $countStmt->fetchColumn();
+
+        $offset = ($page - 1) * $limit;
+        $stmt = $pdo->prepare(
+            "SELECT ma.id, ma.action_type, ma.target_type, ma.target_id, ma.target_owner_id,
+                    ma.actor_id, ma.requested_by, ma.reason, ma.strike,
+                    ma.reverted_at, ma.created_at,
+                    actor.username AS actor_name, owner.username AS owner_name,
+                    requester.username AS requested_by_name, reverter.username AS reverted_by_name
+             FROM moderation_actions ma
+             JOIN users actor ON actor.id = ma.actor_id
+             LEFT JOIN users owner ON owner.id = ma.target_owner_id
+             LEFT JOIN users requester ON requester.id = ma.requested_by
+             LEFT JOIN users reverter ON reverter.id = ma.reverted_by
+             $whereSql
+             ORDER BY ma.created_at DESC
+             LIMIT $limit OFFSET $offset"
+        );
+        $stmt->execute($args);
+        return ['items' => $stmt->fetchAll(), 'total' => $total];
+    }
+
+    /** Distinct actors appearing in the audit log (filter facet). */
+    public static function auditActors(): array
+    {
+        $pdo = getDB();
+        $stmt = $pdo->query(
+            "SELECT DISTINCT u.id, u.username
+             FROM moderation_actions ma
+             JOIN users u ON u.id = ma.actor_id
+             ORDER BY u.username ASC"
+        );
+        return $stmt->fetchAll();
+    }
+
+    /** Daily counts for the last $days days (incl. today), oldest
+     * first, zero-filled. Anchored on the database clock so the
+     * buckets match the CURDATE()-based KPI counts. */
+    public static function dailyTrends(int $days = 14): array
+    {
+        $pdo = getDB();
+        $today = (string) $pdo->query('SELECT CURDATE()')->fetchColumn();
+        $series = [];
+        $cursor = new \DateTime($today);
+        $cursor->modify('-' . ($days - 1) . ' days');
+        for ($i = 0; $i < $days; $i++) {
+            $series[$cursor->format('Y-m-d')] = [
+                'date' => $cursor->format('Y-m-d'),
+                'registrations' => 0,
+                'posts' => 0,
+                'collabs' => 0,
+            ];
+            $cursor->modify('+1 day');
+        }
+        $since = array_key_first($series);
+        $queries = [
+            'registrations' => "SELECT DATE(created_at) AS d, COUNT(*) AS c FROM users WHERE username != 'underflow-admin' AND DATE(created_at) >= ? GROUP BY DATE(created_at)",
+            'posts' => "SELECT DATE(created_at) AS d, COUNT(*) AS c FROM public_posts WHERE DATE(created_at) >= ? GROUP BY DATE(created_at)",
+            'collabs' => "SELECT DATE(created_at) AS d, COUNT(*) AS c FROM collaborations WHERE DATE(created_at) >= ? GROUP BY DATE(created_at)",
+        ];
+        foreach ($queries as $key => $sql) {
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([$since]);
+            foreach ($stmt->fetchAll() as $row) {
+                if (isset($series[$row['d']])) {
+                    $series[$row['d']][$key] = (int) $row['c'];
+                }
+            }
+        }
+        return array_values($series);
+    }
+
+    /** All users for the CSV export (audit P1 #9). */
+    public static function exportUsers(): array
+    {
+        $pdo = getDB();
+        $stmt = $pdo->query(
+            "SELECT u.username, u.email,
+                    CASE WHEN u.google_id IS NULL OR u.google_id = '' THEN 'password' ELSE 'google' END AS provider,
+                    u.role, u.account_status, u.created_at,
+                    (SELECT COUNT(*) FROM public_posts pp WHERE pp.user_id = u.id AND pp.deleted_at IS NULL) AS post_count,
+                    (SELECT COUNT(*) FROM collaborations c WHERE c.user_id = u.id AND c.deleted_at IS NULL) AS collabs_owned,
+                    (SELECT COUNT(*) FROM moderation_actions ma WHERE ma.target_owner_id = u.id AND ma.strike = 1 AND ma.reverted_at IS NULL) AS strike_count
+             FROM users u
+             WHERE u.username != 'underflow-admin'
+             ORDER BY u.created_at ASC"
+        );
+        return $stmt->fetchAll();
+    }
+
 }

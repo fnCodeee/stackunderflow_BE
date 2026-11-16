@@ -73,6 +73,7 @@ class AdminController
                 'action_requests_pending' => $count("SELECT COUNT(*) FROM action_requests WHERE status = 'pending'"),
                 'appeals_pending' => $count("SELECT COUNT(*) FROM appeals WHERE status = 'pending'"),
                 'recent_activity' => AdminModel::recentActivity(10),
+                'trends' => AdminModel::dailyTrends(14),
                 'viewer' => $viewer,
             ];
 
@@ -82,6 +83,52 @@ class AdminController
             error_log('[SERVER ERROR] ' . $e->getMessage());
             Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
+    }
+
+    /** GET /api/admin/audit-log?action_type=&target_type=&actor_id=&page=&limit= */
+    public static function auditLog(array $params = []): void
+    {
+        try {
+            [$page, $limit] = self::pageParams();
+            $actionTypes = ['remove_post', 'remove_comment', 'remove_collab', 'suspend_user', 'dismiss_report', 'restore_content', 'unsuspend_user', 'grant_appeal', 'deny_appeal'];
+            $targetTypes = ['post', 'comment', 'collab', 'user', 'report'];
+            $actionType = trim((string) ($_GET['action_type'] ?? ''));
+            $targetType = trim((string) ($_GET['target_type'] ?? ''));
+            $actorId = trim((string) ($_GET['actor_id'] ?? ''));
+            $result = AdminModel::listAuditLog(
+                in_array($actionType, $actionTypes, true) ? $actionType : '',
+                in_array($targetType, $targetTypes, true) ? $targetType : '',
+                $actorId,
+                $page,
+                $limit
+            );
+            $data = self::envelope($result, $page, $limit);
+            $data['actors'] = AdminModel::auditActors();
+            Response::json($data, 200, 'OK', true);
+        } catch (Throwable $e) {
+            error_log('[ADMIN AUDIT LOG ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
+        }
+    }
+
+    /** GET /api/admin/users/export - CSV download of all users. */
+    public static function exportUsersCsv(array $params = []): void
+    {
+        try {
+            $rows = AdminModel::exportUsers();
+        } catch (Throwable $e) {
+            error_log('[ADMIN EXPORT ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
+        }
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename="underflow-users.csv"');
+        $out = fopen('php://output', 'w');
+        fputcsv($out, ['username', 'email', 'provider', 'role', 'status', 'joined_at', 'posts', 'collabs_owned', 'strikes']);
+        foreach ($rows as $r) {
+            fputcsv($out, [$r['username'], $r['email'], $r['provider'], $r['role'], $r['account_status'], $r['created_at'], $r['post_count'], $r['collabs_owned'], $r['strike_count']]);
+        }
+        fclose($out);
+        exit;
     }
 
     /** GET /api/admin/users?q=&status=&role=&page=&limit= */

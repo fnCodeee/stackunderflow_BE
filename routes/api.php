@@ -204,7 +204,9 @@ $router->post('/api/appeals', [AuthMiddleware::class, 'handle'], [AppealsControl
 $router->get('/api/appeals', [AuthMiddleware::class, 'handle'], [AppealsController::class, 'mine']);
 $router->post('/api/appeals/suspended', [AppealsController::class, 'suspended']);
 $router->get('/api/admin/overview', [AdminMiddleware::class, 'handle'], [AdminController::class, 'overview']);
+$router->get('/api/admin/audit-log', [AdminMiddleware::class, 'handle'], [AdminController::class, 'auditLog']);
 $router->get('/api/admin/users', [AdminMiddleware::class, 'handle'], [AdminController::class, 'users']);
+$router->get('/api/admin/users/export', [AdminMiddleware::class, 'handle'], [AdminController::class, 'exportUsersCsv']);
 $router->get('/api/admin/users/:id', [AdminMiddleware::class, 'handle'], [AdminController::class, 'userDetail']);
 $router->get('/api/admin/content/:type', [AdminMiddleware::class, 'handle'], [AdminController::class, 'content']);
 $router->post('/api/admin/actions', [AdminMiddleware::class, 'handle'], [AdminMiddleware::class, 'requireSuper'], [AdminModerationController::class, 'actions']);
