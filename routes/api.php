@@ -19,6 +19,7 @@ require_once BASE_PATH . '/controllers/ProfileController.php';
 require_once BASE_PATH . '/controllers/PostController.php';
 require_once BASE_PATH . '/controllers/CollabController.php';
 require_once BASE_PATH . '/controllers/SkillController.php';
+require_once BASE_PATH . '/controllers/SearchController.php';
 require_once BASE_PATH . '/controllers/UserController.php';
 require_once BASE_PATH . '/controllers/UploadController.php';
 require_once BASE_PATH . '/controllers/NotificationController.php';
@@ -123,6 +124,9 @@ $router->delete('/api/comments/:commentId/unlike', [AuthMiddleware::class, 'hand
 // ── NOTIFICATIONS MODULE ──────────────────────────────────────────────────────
 // GET /api/notifications: daftar notifikasi milik user login (auth required)
 $router->get('/api/notifications', [AuthMiddleware::class, 'handle'], [NotificationController::class, 'listNotifications']);
+
+// GET /api/search: pencarian global TopBar (audit P2 #21)
+$router->get('/api/search', [AuthMiddleware::class, 'handle'], [SearchController::class, 'index']);
 
 // PUT /api/notifications/:id/read: tandai satu notifikasi dibaca (auth required)
 $router->put('/api/notifications/:id/read', [AuthMiddleware::class, 'handle'], [NotificationController::class, 'markRead']);
