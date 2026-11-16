@@ -76,6 +76,14 @@ class AuthController
                 Response::json(null, 400, 'Mohon isi semua kolom!', false, null, 'validation_error');
             }
 
+            // 2b. Persetujuan Ketentuan Layanan + Kebijakan
+            // Privasi wajib (audit P2 #20): tanpa persetujuan
+            // eksplisit dari form signup, pendaftaran tidak
+            // diproses sama sekali.
+            if (($body['terms_accepted'] ?? false) !== true) {
+                Response::json(null, 400, 'Mohon setujui Ketentuan Layanan dan Kebijakan Privasi.', false, null, 'terms_not_accepted');
+            }
+
             // 3. Validasi duplikasi username/email di tabel users
             $existingUser = UserModel::findByUsername($username);
             if ($existingUser !== null) {
@@ -260,6 +268,7 @@ class AuthController
                         'email'     => $email,
                         'password'  => $randomPassword,
                         'google_id' => $googleId,
+                        'terms_accepted_at' => date('Y-m-d H:i:s'),
                     ]);
                     ProfileModel::create([
                         'user_id'                 => $user['id'],
@@ -764,6 +773,7 @@ class AuthController
                     'username' => (string) $row['username'],
                     'email'    => (string) $row['email'],
                     'password' => (string) $row['password_hash'],
+                    'terms_accepted_at' => $row['terms_accepted_at'] ?: date('Y-m-d H:i:s'),
                 ]);
                 ProfileModel::create([
                     'user_id'                 => $newUser['id'],

@@ -82,8 +82,8 @@ class PendingRegistrationModel
         $id = self::uuid();
         $token = bin2hex(random_bytes(32));
         $stmt = getDB()->prepare(
-            'INSERT INTO pending_registrations (id, username, email, password_hash, token_hash, expires_at)
-             VALUES (?, ?, ?, ?, ?, ?)'
+            'INSERT INTO pending_registrations (id, username, email, password_hash, token_hash, expires_at, terms_accepted_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)'
         );
         $stmt->execute([
             $id,
@@ -92,6 +92,7 @@ class PendingRegistrationModel
             $passwordHash,
             hash('sha256', $token),
             date('Y-m-d H:i:s', time() + self::TTL_SECONDS),
+            date('Y-m-d H:i:s'),
         ]);
         return [self::findById($id), $token];
     }
@@ -106,12 +107,13 @@ class PendingRegistrationModel
     {
         $token = bin2hex(random_bytes(32));
         $stmt = getDB()->prepare(
-            'UPDATE pending_registrations SET password_hash = ?, token_hash = ?, expires_at = ? WHERE id = ?'
+            'UPDATE pending_registrations SET password_hash = ?, token_hash = ?, expires_at = ?, terms_accepted_at = ? WHERE id = ?'
         );
         $stmt->execute([
             $passwordHash,
             hash('sha256', $token),
             date('Y-m-d H:i:s', time() + self::TTL_SECONDS),
+            date('Y-m-d H:i:s'),
             $row['id'],
         ]);
         return $token;

@@ -102,10 +102,11 @@ class UserModel
         $email = $data['email'];
         $isActive = isset($data['is_active']) ? (int)(bool)$data['is_active'] : 1;
         $googleId = $data['google_id'] ?? null;
+        $termsAcceptedAt = $data['terms_accepted_at'] ?? null;
 
         $stmt = $pdo->prepare(
-            "INSERT INTO users (id, username, email, password, is_active, google_id) 
-             VALUES (:id, :username, :email, :password, :is_active, :google_id)"
+            "INSERT INTO users (id, username, email, password, is_active, google_id, terms_accepted_at) 
+             VALUES (:id, :username, :email, :password, :is_active, :google_id, :terms_accepted_at)"
         );
 
         $stmt->execute([
@@ -115,6 +116,7 @@ class UserModel
             ':password'  => $password,
             ':is_active' => $isActive,
             ':google_id' => $googleId,
+            ':terms_accepted_at' => $termsAcceptedAt,
         ]);
 
         $created = self::findById($id);
