@@ -257,6 +257,8 @@ class InboxModel
     {
         $pdo->prepare("UPDATE dm_messages SET is_read = 1 WHERE conversation_id = :conv AND sender_id <> :user AND is_read = 0")
             ->execute([':conv' => $conversationId, ':user' => $userId]);
+        $pdo->prepare("UPDATE dm_participants SET marked_unread = 0 WHERE conversation_id = :conv AND user_id = :user")
+            ->execute([':conv' => $conversationId, ':user' => $userId]);
     }
 
     // ── State per-peserta ────────────────────────────────────────
@@ -264,7 +266,7 @@ class InboxModel
     /** Balik flag is_muted / is_pinned milik peserta; kembalikan nilai barunya. */
     public static function toggleFlag(PDO $pdo, string $conversationId, string $userId, string $flag): bool
     {
-        if (!in_array($flag, ['is_muted', 'is_pinned'], true)) {
+        if (!in_array($flag, ['is_muted', 'is_pinned', 'is_archived'], true)) {
             throw new InvalidArgumentException('Unknown flag: ' . $flag);
         }
         $pdo->prepare("UPDATE dm_participants SET {$flag} = 1 - {$flag} WHERE conversation_id = :conv AND user_id = :user")
@@ -309,6 +311,17 @@ class InboxModel
      *
      * @return array<int, array<string, mixed>>
      */
+    /**
+     * Tandai belum dibaca (audit P1 #13): flag per-peserta yang
+     * dilipat ke unread_count di listForUser sampai thread dibuka
+     * lagi (markRead menghapusnya).
+     */
+    public static function markUnread(PDO $pdo, string $conversationId, string $userId): void
+    {
+        $pdo->prepare("UPDATE dm_participants SET marked_unread = 1 WHERE conversation_id = :conv AND user_id = :user")
+            ->execute([':conv' => $conversationId, ':user' => $userId]);
+    }
+
     public static function listForUser(string $userId, ?string $onlyId = null): array
     {
         $pdo = getDB();
@@ -323,6 +336,8 @@ class InboxModel
                 opr.photo_profile_url AS other_photo,
                 p.is_muted,
                 p.is_pinned,
+                p.is_archived,
+                p.marked_unread,
                 a.id AS app_id,
                 a.status AS app_status,
                 a.user_id AS app_user_id,
@@ -400,9 +415,11 @@ class InboxModel
                     'sender_id' => $row['last_sender'],
                     'created_at' => $row['last_at'],
                 ],
-                'unread_count' => (int) $row['unread_count'],
+                'unread_count' => max((int) $row['unread_count'], !empty($row['marked_unread']) ? 1 : 0),
                 'is_muted' => (bool) $row['is_muted'],
                 'is_pinned' => (bool) $row['is_pinned'],
+                'is_archived' => (bool) $row['is_archived'],
+                'marked_unread' => (bool) $row['marked_unread'],
                 'updated_at' => $row['updated_at'],
                 'application' => $application,
                 'kind' => $row['kind'] ?? 'direct',

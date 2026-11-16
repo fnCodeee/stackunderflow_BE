@@ -218,6 +218,28 @@ class InboxController
         self::toggleFlag($params, 'is_pinned', 'pinned');
     }
 
+    /** PUT /api/inbox/conversations/:id/archive — toggle (audit P1 #13). */
+    public static function toggleArchive(array $params = []): void
+    {
+        self::toggleFlag($params, 'is_archived', 'archived');
+    }
+
+    /** POST /api/inbox/conversations/:id/mark-unread — flag per-peserta (audit P1 #13). */
+    public static function markUnread(array $params = []): void
+    {
+        try {
+            $userId = self::userId();
+            $conversationId = $params['id'] ?? '';
+            self::requireParticipant($conversationId, $userId);
+            InboxModel::markUnread(getDB(), $conversationId, $userId);
+            Response::json(null, 200, 'Marked as unread', true);
+        } catch (Throwable $e) {
+            error_log('[INBOX UNREAD ERROR] ' . $e->getMessage());
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
+        }
+    }
+
     private static function toggleFlag(array $params, string $flag, string $label): void
     {
         try {

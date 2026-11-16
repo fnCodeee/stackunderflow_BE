@@ -137,6 +137,8 @@ $router->post('/api/inbox/conversations/:id/messages', [AuthMiddleware::class, '
 $router->post('/api/inbox/conversations/:id/read', [AuthMiddleware::class, 'handle'], [InboxController::class, 'markRead']);
 $router->put('/api/inbox/conversations/:id/mute', [AuthMiddleware::class, 'handle'], [InboxController::class, 'toggleMute']);
 $router->put('/api/inbox/conversations/:id/pin', [AuthMiddleware::class, 'handle'], [InboxController::class, 'togglePin']);
+$router->put('/api/inbox/conversations/:id/archive', [AuthMiddleware::class, 'handle'], [InboxController::class, 'toggleArchive']);
+$router->post('/api/inbox/conversations/:id/mark-unread', [AuthMiddleware::class, 'handle'], [InboxController::class, 'markUnread']);
 $router->post('/api/inbox/conversations/:id/clear', [AuthMiddleware::class, 'handle'], [InboxController::class, 'clearConversation']);
 $router->post('/api/inbox/conversations/:id/restore', [AuthMiddleware::class, 'handle'], [InboxController::class, 'restoreConversation']);
 $router->delete('/api/inbox/conversations/:id', [AuthMiddleware::class, 'handle'], [InboxController::class, 'hideConversation']);
