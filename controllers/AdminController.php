@@ -60,6 +60,18 @@ class AdminController
                 }
             }
 
+            $series = AdminModel::dailyTrends(28);
+            $cur14 = array_slice($series, -14);
+            $prev14 = array_slice($series, 0, 14);
+            $periodFor = static function (string $key) use ($cur14, $prev14): array {
+                $now = (int) array_sum(array_column($cur14, $key));
+                $before = (int) array_sum(array_column($prev14, $key));
+                $delta = $before === 0
+                    ? ($now > 0 ? null : 0)
+                    : (int) round(($now - $before) / $before * 100);
+                return ['total' => $now, 'delta' => $delta];
+            };
+
             $data = [
                 'users_total' => $count("SELECT COUNT(*) FROM users WHERE username != 'underflow-admin'"),
                 'users_new_today' => $count("SELECT COUNT(*) FROM users WHERE username != 'underflow-admin' AND DATE(created_at) = CURDATE()"),
@@ -72,8 +84,13 @@ class AdminController
                 'reports_open' => $count("SELECT COUNT(*) FROM reports WHERE status = 'open'"),
                 'action_requests_pending' => $count("SELECT COUNT(*) FROM action_requests WHERE status = 'pending'"),
                 'appeals_pending' => $count("SELECT COUNT(*) FROM appeals WHERE status = 'pending'"),
-                'recent_activity' => AdminModel::recentActivity(10),
-                'trends' => AdminModel::dailyTrends(14),
+                'recent_activity' => AdminModel::recentActivity(25),
+                'trends' => $cur14,
+                'period' => [
+                    'registrations' => $periodFor('registrations'),
+                    'posts' => $periodFor('posts'),
+                    'collabs' => $periodFor('collabs'),
+                ],
                 'viewer' => $viewer,
             ];
 

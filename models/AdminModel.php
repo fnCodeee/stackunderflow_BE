@@ -337,8 +337,8 @@ class AdminModel
         $since = array_key_first($series);
         $queries = [
             'registrations' => "SELECT DATE(created_at) AS d, COUNT(*) AS c FROM users WHERE username != 'underflow-admin' AND DATE(created_at) >= ? GROUP BY DATE(created_at)",
-            'posts' => "SELECT DATE(created_at) AS d, COUNT(*) AS c FROM public_posts WHERE DATE(created_at) >= ? GROUP BY DATE(created_at)",
-            'collabs' => "SELECT DATE(created_at) AS d, COUNT(*) AS c FROM collaborations WHERE DATE(created_at) >= ? GROUP BY DATE(created_at)",
+            'posts' => "SELECT DATE(created_at) AS d, COUNT(*) AS c FROM public_posts WHERE deleted_at IS NULL AND DATE(created_at) >= ? GROUP BY DATE(created_at)",
+            'collabs' => "SELECT DATE(created_at) AS d, COUNT(*) AS c FROM collaborations WHERE deleted_at IS NULL AND DATE(created_at) >= ? GROUP BY DATE(created_at)",
         ];
         foreach ($queries as $key => $sql) {
             $stmt = $pdo->prepare($sql);
