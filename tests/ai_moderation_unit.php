@@ -51,11 +51,13 @@ check('merge satu set kosong', AiModerationService::mergeScores()['judol'] === 0
 // topCategory()
 check('topCategory miras', AiModerationService::topCategory(scores(judol: 10, miras: 77)) === 'miras');
 
-// kata_kasar (kebijakan v2, keputusan user 2026-11-17):
-// ringan masuk zona abu-abu, berat dihapus, harfiah lolos.
-check('kata_kasar 50 -> flag', AiModerationService::decide(scores(kata_kasar: 50), $cfg) === 'flag');
+// kata_kasar (kebijakan v3, keputusan user 2026-11-17):
+// tidak ada tingkat ringan, semua makian dihapus; harfiah lolos.
+check('kata_kasar 50 -> remove', AiModerationService::decide(scores(kata_kasar: 50), $cfg) === 'remove');
+check('kata_kasar 40 persis -> remove', AiModerationService::decide(scores(kata_kasar: 40), $cfg) === 'remove');
+check('kata_kasar 39 -> clean', AiModerationService::decide(scores(kata_kasar: 39), $cfg) === 'clean');
 check('kata_kasar 85 -> remove', AiModerationService::decide(scores(kata_kasar: 85), $cfg) === 'remove');
-check('kata_kasar 20 -> clean', AiModerationService::decide(scores(kata_kasar: 20), $cfg) === 'clean');
+check('kategori lain 50 tetap flag', AiModerationService::decide(scores(miras: 50), $cfg) === 'flag');
 
 // OpenRouterClient::parseScores()
 $parsed = OpenRouterClient::parseScores('{"judol": 95, "seksual": 0, "kekerasan": 0, "miras": 0, "berbahaya": 0, "kata_kasar": 0, "alasan": "Iklan judi slot."}');

@@ -118,6 +118,13 @@ class AiModerationService
 
     public static function decide(array $scores, array $cfg): string
     {
+        // Kata kasar tidak mengenal tingkat ringan (keputusan user
+        // 2026-11-17): skor kata_kasar yang mencapai ambang abu-abu
+        // berarti model memastikan itu makian, dan makian selalu
+        // dihapus. Ini jaring pengaman bila model memberi 40-69.
+        if ((int) ($scores['kata_kasar'] ?? 0) >= (int) ($cfg['profanity_remove_at'] ?? 40)) {
+            return 'remove';
+        }
         $max = 0;
         foreach (self::CATEGORIES as $category) {
             $max = max($max, (int) ($scores[$category] ?? 0));
@@ -333,6 +340,15 @@ class AiModerationService
                 self::recordVerdict($job, $decidingModel, $cfg, $scores, 'gone', 'Eksekusi dilewati: ' . $e->getMessage(), null, $usages, self::elapsed($started));
                 return;
             }
+        }
+
+        if ($decision === 'remove' && $actionId !== null) {
+            // Penghapusan menutup flag abu-abu lama untuk target
+            // yang sama, supaya tidak menggantung di panel admin.
+            $stmt = getDB()->prepare(
+                "UPDATE ai_moderation_verdicts SET flag_state = 'removed', flag_resolved_by = ?, flag_resolved_at = ? WHERE target_id = ? AND decision = 'flag' AND flag_state = 'open'"
+            );
+            $stmt->execute([self::AI_USER_ID, date('Y-m-d H:i:s'), $targetId]);
         }
 
         self::recordVerdict($job, $decidingModel, $cfg, $scores, $decision, (string) ($scores['alasan'] ?? ''), $actionId, $usages, self::elapsed($started));

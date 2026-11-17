@@ -10,7 +10,9 @@
  * dan Qwen 3.8 Omni Flash sama-sama 20/20). v2 (2026-11-17 sore,
  * perintah user): kategori kata_kasar ditambah, dan SEMUA teks
  * dinilai model karena rencana user memang semua konten dicek,
- * bukan gambar saja. Setiap perubahan prompt WAJIB menaikkan
+ * bukan gambar saja. v3 (2026-11-17): kata_kasar tidak kenal
+ * tingkat ringan, semua makian = pelanggaran berat (perintah
+ * user). Setiap perubahan prompt WAJIB menaikkan
  * 'prompt_version'.
  * ─────────────────────────────────────────────────────────────────────────────
  */
@@ -41,11 +43,15 @@ function aiModerationConfig(): array
         'free_daily_soft_cap' => 45,
         'threshold_remove' => 70,
         'threshold_grey' => 40,
+        // Kata kasar tidak kenal tingkat ringan (user 2026-11-17):
+        // skor kata_kasar mencapai angka ini selalu berujung hapus,
+        // walau model menilainya di pita abu-abu.
+        'profanity_remove_at' => 40,
         'max_tokens' => 1500,
         'timeout_seconds' => 60,
         'max_images_per_target' => 5,
         'max_attempts' => 5,
-        'prompt_version' => 'v2',
+        'prompt_version' => 'v3',
         'prompt' => <<<'PROMPT'
 Kamu adalah moderator konten untuk platform kolaborasi mahasiswa Indonesia bernama Underflow. Nilai konten yang diberikan (gambar, teks, atau keduanya) dengan skor 0-100 untuk enam kategori pelanggaran:
 
@@ -55,7 +61,7 @@ Kamu adalah moderator konten untuk platform kolaborasi mahasiswa Indonesia berna
 4. miras: PROMOSI minuman beralkohol: iklan, poster brand, foto produk yang diglamourkan untuk menjual. Alkohol yang muncul insidental dalam foto sosial (misalnya teman bersulang saat makan bersama) BUKAN pelanggaran.
 5. berbahaya: senjata api atau senjata tajam dipamerkan sebagai produk atau kebanggaan, narkoba, atau aktivitas berbahaya yang diglamourkan. Pisau dapur saat memasak dan alat kerja normal BUKAN pelanggaran.
 
-6. kata_kasar: kata kasar, makian, atau pelecehan verbal. Patokan skor: makian ringan yang berdiri sendiri tanpa sasaran jelas (misalnya satu kata umpatan sebagai seluruh isi) beri 40-60; makian yang ditujukan ke orang atau kelompok tertentu, makian berat atau berulang, atau yang disertai ancaman beri 70-100. Pemakaian harfiah BUKAN makian dan BUKAN pelanggaran: kata "anjing" untuk hewan peliharaan, "babi" untuk hewan atau makanan, dan konteks serupa beri skor 0-20 untuk kategori ini.
+6. kata_kasar: kata kasar, makian, atau pelecehan verbal. Di platform ini kata kasar TIDAK mengenal tingkat ringan: setiap kata yang memang dipakai sebagai makian adalah pelanggaran berat, beri skor 70-100, baik berdiri sendiri sebagai seluruh isi, ditujukan ke orang atau kelompok tertentu, apalagi disertai ancaman. Pemakaian harfiah BUKAN makian dan BUKAN pelanggaran: kata "anjing" untuk hewan peliharaan, "babi" untuk hewan atau makanan, dan konteks serupa beri skor 0-20 untuk kategori ini.
 
 Balas HANYA dengan JSON valid tanpa teks lain, format persis:
 {"judol": 0, "seksual": 0, "kekerasan": 0, "miras": 0, "berbahaya": 0, "kata_kasar": 0, "alasan": "satu kalimat Bahasa Indonesia"}
