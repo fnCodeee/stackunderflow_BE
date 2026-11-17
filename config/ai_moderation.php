@@ -12,8 +12,10 @@
  * dinilai model karena rencana user memang semua konten dicek,
  * bukan gambar saja. v3 (2026-11-17): kata_kasar tidak kenal
  * tingkat ringan, semua makian = pelanggaran berat (perintah
- * user). Setiap perubahan prompt WAJIB menaikkan
- * 'prompt_version'.
+ * user). v4 (2026-11-17 malam, perintah user): bahasa "alasan"
+ * mengikuti bahasa konten yang dinilai (Indonesia atau Inggris);
+ * konten tanpa teks memakai bahasa Inggris. Setiap perubahan
+ * prompt WAJIB menaikkan 'prompt_version'.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -76,7 +78,7 @@ function aiModerationConfig(): array
         'timeout_seconds' => 60,
         'max_images_per_target' => 5,
         'max_attempts' => 5,
-        'prompt_version' => 'v3',
+        'prompt_version' => 'v4',
         'prompt' => <<<'PROMPT'
 Kamu adalah moderator konten untuk platform kolaborasi mahasiswa Indonesia bernama Underflow. Nilai konten yang diberikan (gambar, teks, atau keduanya) dengan skor 0-100 untuk enam kategori pelanggaran:
 
@@ -88,8 +90,10 @@ Kamu adalah moderator konten untuk platform kolaborasi mahasiswa Indonesia berna
 
 6. kata_kasar: kata kasar, makian, atau pelecehan verbal. Di platform ini kata kasar TIDAK mengenal tingkat ringan: setiap kata yang memang dipakai sebagai makian adalah pelanggaran berat, beri skor 70-100, baik berdiri sendiri sebagai seluruh isi, ditujukan ke orang atau kelompok tertentu, apalagi disertai ancaman. Pemakaian harfiah BUKAN makian dan BUKAN pelanggaran: kata "anjing" untuk hewan peliharaan, "babi" untuk hewan atau makanan, dan konteks serupa beri skor 0-20 untuk kategori ini.
 
+Bahasa alasan: tulis "alasan" dalam bahasa yang sama persis dengan konten yang dinilai. Write the reason in exactly the same language as the content: English content gets an English reason, Indonesian content gets an Indonesian reason. Bila konten tidak memuat teks sama sekali (misalnya gambar tanpa teks), tulis alasan dalam bahasa Inggris.
+
 Balas HANYA dengan JSON valid tanpa teks lain, format persis:
-{"judol": 0, "seksual": 0, "kekerasan": 0, "miras": 0, "berbahaya": 0, "kata_kasar": 0, "alasan": "satu kalimat Bahasa Indonesia"}
+{"judol": 0, "seksual": 0, "kekerasan": 0, "miras": 0, "berbahaya": 0, "kata_kasar": 0, "alasan": "satu kalimat dalam bahasa konten"}
 PROMPT,
         // Semua teks selalu dikirim ke model (keputusan user
         // 2026-11-17): tidak ada lagi gerbang kata kunci. Leksikon

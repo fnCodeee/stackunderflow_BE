@@ -79,6 +79,24 @@ try {
     check('parse sampah -> exception', true);
 }
 
+// Notice v4 (2026-11-17): label kategori terbaca manusia dan
+// prompt_version naik mengikuti perubahan prompt alasan.
+check('label kata_kasar', AiModerationService::categoryLabel('kata_kasar') === 'Profanity');
+check('label judol', AiModerationService::categoryLabel('judol') === 'Gambling promotion');
+check('label kategori asing apa adanya', AiModerationService::categoryLabel('lainnya') === 'lainnya');
+check('prompt_version v4', $cfg['prompt_version'] === 'v4');
+
+// Bahasa alasan mengikuti bahasa konten (keputusan user
+// 2026-11-17): deteksi kata penanda, kosong berarti Inggris.
+check('bahasa alasan teks ID', AiModerationService::reasonLanguageFor('Tolong, anjing saya hilang di sekitar kampus sejak kemarin.') === 'id');
+check('bahasa alasan teks EN', AiModerationService::reasonLanguageFor('Hello everyone, I lost my dog near campus yesterday. Please help.') === 'en');
+check('bahasa alasan judol ID', AiModerationService::reasonLanguageFor('SLOT GACOR HARI INI! Bonus new member 100%, depo pulsa tanpa potongan, daftar lewat WA sekarang!') === 'id');
+check('bahasa alasan judol EN', AiModerationService::reasonLanguageFor('GACOR SLOTS TODAY! 100% new member bonus, deposit via e-wallet with no fees, register on WhatsApp now!') === 'en');
+check('bahasa alasan makian ID', AiModerationService::reasonLanguageFor('dasar bajingan kamu') === 'id');
+check('bahasa alasan makian EN', AiModerationService::reasonLanguageFor('you are a damn idiot') === 'en');
+check('bahasa alasan kosong -> en', AiModerationService::reasonLanguageFor('') === 'en');
+check('bahasa alasan null -> en', AiModerationService::reasonLanguageFor(null) === 'en');
+
 // Routing provider (2026-11-17): primary pindah ke xKiro, eskalasi
 // zona abu-abu ke Nemotron, rem kuota menjaga free OpenRouter.
 check('provider mistral -> xkiro', OpenRouterClient::providerFor($cfg, 'mistralai/mistral-medium-3.5') === 'xkiro');

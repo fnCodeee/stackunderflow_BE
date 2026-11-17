@@ -58,7 +58,7 @@ class OpenRouterClient
         ];
     }
 
-    public static function judge(array $cfg, string $model, ?string $imageBytes, ?string $text): array
+    public static function judge(array $cfg, string $model, ?string $imageBytes, ?string $text, ?string $reasonLang = null): array
     {
         $route = self::route($cfg, $model);
         $apiKey = $route['api_key'];
@@ -66,6 +66,13 @@ class OpenRouterClient
         $userText = 'Nilai konten ini sesuai kebijakan. Balas hanya JSON.';
         if ($text !== null && trim($text) !== '') {
             $userText .= "\n\nTeks konten:\n" . mb_substr(trim($text), 0, 2000);
+        }
+        // Bahasa alasan dikunci per permintaan mengikuti bahasa
+        // konten (keputusan user 2026-11-17).
+        if ($reasonLang === 'id') {
+            $userText .= "\n\nTulis alasan dalam Bahasa Indonesia.";
+        } elseif ($reasonLang === 'en') {
+            $userText .= "\n\nWrite the reason (alasan) in English.";
         }
         $content = [['type' => 'text', 'text' => $userText]];
         if ($imageBytes !== null) {

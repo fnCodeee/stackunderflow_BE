@@ -39,6 +39,24 @@ class AiModerationService
         'collab' => 'remove_collab',
     ];
 
+    // Label kategori yang terbaca manusia, untuk reason aksi dan
+    // notice ke user. Kunci mentah seperti 'kata_kasar' tidak
+    // pernah tampil ke user.
+    private const CATEGORY_LABELS = [
+        'judol' => 'Gambling promotion',
+        'seksual' => 'Sexual content',
+        'kekerasan' => 'Graphic violence',
+        'miras' => 'Alcohol promotion',
+        'berbahaya' => 'Dangerous content',
+        'kata_kasar' => 'Profanity',
+    ];
+
+    /** Label terbaca manusia untuk satu kategori pelanggaran. */
+    public static function categoryLabel(string $category): string
+    {
+        return self::CATEGORY_LABELS[$category] ?? $category;
+    }
+
     // ── Enqueue ─────────────────────────────────────────────────────
 
     /**
@@ -165,6 +183,36 @@ class AiModerationService
             : (string) $cfg['escalation_model'];
     }
 
+    // Kata penanda untuk deteksi ringan bahasa konten.
+    private const ID_MARKERS = ['yang', 'dan', 'di', 'ini', 'itu', 'untuk', 'dengan', 'tidak', 'ada', 'saya', 'aku', 'kamu', 'dari', 'pada', 'atau', 'juga', 'akan', 'sudah', 'bisa', 'tolong', 'banget', 'karena', 'kalau', 'jadi', 'lagi', 'mau', 'hari', 'sekarang', 'halo', 'tanpa', 'daftar', 'lewat', 'pulsa', 'gacor', 'depo', 'situs', 'jamin', 'menang', 'semua', 'kami', 'kita'];
+    private const EN_MARKERS = ['the', 'and', 'is', 'are', 'this', 'that', 'for', 'with', 'you', 'your', 'now', 'today', 'join', 'our', 'we', 'please', 'thanks', 'thank', 'hello', 'looking', 'need', 'help', 'anyone', 'group', 'study', 'meet', 'every', 'free', 'new', 'member', 'bonus', 'register', 'lost', 'my', 'dog', 'near', 'campus', 'was', 'were', 'will', 'can', 'any', 'all', 'get', 'no', 'fees', 'via', 'deposit'];
+
+    /**
+     * Bahasa alasan model, mengikuti bahasa teks konten yang
+     * dinilai (keputusan user 2026-11-17: alasan mengikuti apa
+     * yang dihapus). Instruksi prompt saja terbukti tidak cukup
+     * konsisten, jadi bahasa dideteksi di sini lalu dikunci per
+     * permintaan. Teks kosong atau tanpa kata penanda memakai
+     * Inggris, sama seperti konten tanpa teks.
+     */
+    public static function reasonLanguageFor(?string $text): string
+    {
+        $words = preg_split('/[^a-z]+/', mb_strtolower((string) $text), -1, PREG_SPLIT_NO_EMPTY);
+        if ($words === false || $words === []) {
+            return 'en';
+        }
+        $id = 0;
+        $en = 0;
+        foreach ($words as $word) {
+            if (in_array($word, self::ID_MARKERS, true)) {
+                $id++;
+            } elseif (in_array($word, self::EN_MARKERS, true)) {
+                $en++;
+            }
+        }
+        return $id > $en ? 'id' : 'en';
+    }
+
     /** Gabung beberapa set skor: per kategori ambil maksimum. */
     public static function mergeScores(array ...$sets): array
     {
@@ -289,6 +337,8 @@ class AiModerationService
             return;
         }
 
+        $reasonLang = self::reasonLanguageFor((string) $target['text']);
+
         $scoreSets = [];
         $setModels = [];
         $usages = [];
@@ -305,7 +355,7 @@ class AiModerationService
                 $setModels[] = $cached['model'];
                 continue;
             }
-            $result = self::judgeWithChain($cfg, $bytes, null);
+            $result = self::judgeWithChain($cfg, $bytes, null, $reasonLang);
             $scoreSets[] = $result['scores'];
             $setModels[] = $result['model'];
             $usages[] = ['model' => $result['model'], 'usage' => $result['usage']];
@@ -317,7 +367,7 @@ class AiModerationService
         // bukan gambar saja; tidak ada gerbang kata kunci).
         $text = trim((string) $target['text']);
         if ($text !== '') {
-            $result = self::judgeWithChain($cfg, null, $text);
+            $result = self::judgeWithChain($cfg, null, $text, $reasonLang);
             $scoreSets[] = $result['scores'];
             $setModels[] = $result['model'];
             $usages[] = ['model' => $result['model'], 'usage' => $result['usage']];
@@ -336,7 +386,7 @@ class AiModerationService
         // eskalasi sebelum menyerahkan ke manusia sebagai flag.
         $capReached = self::openRouterFreeVerdictsToday($cfg) >= (int) $cfg['free_daily_soft_cap'];
         if ($decision === 'flag' && $decidingModel !== self::effectiveEscalationModel($cfg, $capReached)) {
-            $escalated = self::escalate($cfg, $type, $targetId, $text !== '' ? $text : null);
+            $escalated = self::escalate($cfg, $type, $targetId, $text !== '' ? $text : null, $reasonLang);
             if ($escalated !== null) {
                 $scoreSets[] = $escalated['scores'];
                 $setModels[] = $escalated['model'];
@@ -349,7 +399,7 @@ class AiModerationService
 
         $actionId = null;
         if ($decision === 'remove') {
-            $reason = 'AI Moderator: ' . self::topCategory($scores) . ' — ' . (string) ($scores['alasan'] ?? '');
+            $reason = 'AI Moderator (' . self::categoryLabel(self::topCategory($scores)) . '): ' . (string) ($scores['alasan'] ?? '');
             try {
                 $result = ModerationService::execute(
                     [
@@ -396,7 +446,7 @@ class AiModerationService
     }
 
     /** Penilaian ulang zona abu-abu langsung ke model eskalasi. */
-    private static function escalate(array $cfg, string $type, string $targetId, ?string $gatedText): ?array
+    private static function escalate(array $cfg, string $type, string $targetId, ?string $gatedText, ?string $reasonLang = null): ?array
     {
         try {
             $model = self::effectiveEscalationModel(
@@ -410,12 +460,12 @@ class AiModerationService
                 if ($bytes === null) {
                     continue;
                 }
-                $result = OpenRouterClient::judge($cfg, $model, $bytes, null);
+                $result = OpenRouterClient::judge($cfg, $model, $bytes, null, $reasonLang);
                 $sets[] = $result['scores'];
                 $usage[] = $result['usage'];
             }
             if ($gatedText !== null && $gatedText !== '') {
-                $result = OpenRouterClient::judge($cfg, $model, null, $gatedText);
+                $result = OpenRouterClient::judge($cfg, $model, null, $gatedText, $reasonLang);
                 $sets[] = $result['scores'];
                 $usage[] = $result['usage'];
             }
@@ -434,13 +484,13 @@ class AiModerationService
      * chainFor(): primary xKiro selalu pertama; model free
      * OpenRouter ikut hanya selama rem kuotanya belum tercapai.
      */
-    private static function judgeWithChain(array $cfg, ?string $imageBytes, ?string $text): array
+    private static function judgeWithChain(array $cfg, ?string $imageBytes, ?string $text, ?string $reasonLang = null): array
     {
         $models = self::chainFor($cfg, self::openRouterFreeVerdictsToday($cfg) >= (int) $cfg['free_daily_soft_cap']);
         $last = null;
         foreach ($models as $model) {
             try {
-                $result = OpenRouterClient::judge($cfg, (string) $model, $imageBytes, $text);
+                $result = OpenRouterClient::judge($cfg, (string) $model, $imageBytes, $text, $reasonLang);
                 return [
                     'scores' => $result['scores'],
                     'usage' => $result['usage'],

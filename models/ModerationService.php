@@ -507,6 +507,8 @@ class ModerationService
             $lines[] = '';
             $lines[] = "This counts as strike $strikeNo on your account. Repeated violations may lead to a suspension.";
         }
+        $lines[] = '';
+        $lines[] = 'If you think this was a mistake, you can appeal this decision.';
         self::insertSystemMessage($ownerId, implode("\n", $lines), $actionId);
     }
 
