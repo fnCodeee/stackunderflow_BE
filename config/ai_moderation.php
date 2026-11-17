@@ -5,10 +5,13 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * Konfigurasi AI Moderator (spec-ai-moderator.md).
  *
- * Prompt kebijakan di file ini adalah aset konsistensi utama: teksnya
- * identik dengan prompt yang lulus bake-off model 2026-11-17
- * (Nemotron VL free dan Qwen 3.8 Omni Flash sama-sama 20/20).
- * Setiap perubahan prompt WAJIB menaikkan 'prompt_version'.
+ * Prompt kebijakan di file ini adalah aset konsistensi utama.
+ * v1 = teks yang lulus bake-off model 2026-11-17 (Nemotron VL free
+ * dan Qwen 3.8 Omni Flash sama-sama 20/20). v2 (2026-11-17 sore,
+ * perintah user): kategori kata_kasar ditambah, dan SEMUA teks
+ * dinilai model karena rencana user memang semua konten dicek,
+ * bukan gambar saja. Setiap perubahan prompt WAJIB menaikkan
+ * 'prompt_version'.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -42,9 +45,9 @@ function aiModerationConfig(): array
         'timeout_seconds' => 60,
         'max_images_per_target' => 5,
         'max_attempts' => 5,
-        'prompt_version' => 'v1',
+        'prompt_version' => 'v2',
         'prompt' => <<<'PROMPT'
-Kamu adalah moderator konten untuk platform kolaborasi mahasiswa Indonesia bernama Underflow. Nilai gambar yang diberikan dengan skor 0-100 untuk lima kategori pelanggaran:
+Kamu adalah moderator konten untuk platform kolaborasi mahasiswa Indonesia bernama Underflow. Nilai konten yang diberikan (gambar, teks, atau keduanya) dengan skor 0-100 untuk enam kategori pelanggaran:
 
 1. judol: promosi judi online. Penanda khas: mesin slot, kasino, kartu remi untuk taruhan, teks seperti "bonus new member", "slot gacor", "maxwin", "depo pulsa", "betting", "togel", nomor WhatsApp untuk pendaftaran situs judi, uang tunai dipamerkan sebagai iming-iming menang judi.
 2. seksual: konten seksual eksplisit atau pornografi. Pakaian renang di pantai, pakaian olahraga, dan foto liburan biasa BUKAN pelanggaran seksual.
@@ -52,26 +55,16 @@ Kamu adalah moderator konten untuk platform kolaborasi mahasiswa Indonesia berna
 4. miras: PROMOSI minuman beralkohol: iklan, poster brand, foto produk yang diglamourkan untuk menjual. Alkohol yang muncul insidental dalam foto sosial (misalnya teman bersulang saat makan bersama) BUKAN pelanggaran.
 5. berbahaya: senjata api atau senjata tajam dipamerkan sebagai produk atau kebanggaan, narkoba, atau aktivitas berbahaya yang diglamourkan. Pisau dapur saat memasak dan alat kerja normal BUKAN pelanggaran.
 
+6. kata_kasar: kata kasar, makian, atau pelecehan verbal. Patokan skor: makian ringan yang berdiri sendiri tanpa sasaran jelas (misalnya satu kata umpatan sebagai seluruh isi) beri 40-60; makian yang ditujukan ke orang atau kelompok tertentu, makian berat atau berulang, atau yang disertai ancaman beri 70-100. Pemakaian harfiah BUKAN makian dan BUKAN pelanggaran: kata "anjing" untuk hewan peliharaan, "babi" untuk hewan atau makanan, dan konteks serupa beri skor 0-20 untuk kategori ini.
+
 Balas HANYA dengan JSON valid tanpa teks lain, format persis:
-{"judol": 0, "seksual": 0, "kekerasan": 0, "miras": 0, "berbahaya": 0, "alasan": "satu kalimat Bahasa Indonesia"}
+{"judol": 0, "seksual": 0, "kekerasan": 0, "miras": 0, "berbahaya": 0, "kata_kasar": 0, "alasan": "satu kalimat Bahasa Indonesia"}
 PROMPT,
-        // KeywordGate v1 (keputusan Jev 2026-11-17): teks hanya dikirim
-        // ke model bila daftar ini atau pola kontak spam kena. Kena gate
-        // BUKAN vonis, hanya pemicu penilaian model. Daftar ini sengaja
-        // gampang ditambah; naikkan versi di komentar ini saat berubah
-        // (leksikon v1, 2026-11-17).
-        'keywords' => [
-            'slot gacor', 'gacor', 'maxwin', 'judol', 'judi online',
-            'situs judi', 'bandar judi', 'agen judi', 'togel',
-            'depo pulsa', 'deposit pulsa', 'bonus new member',
-            'rtp slot', 'pragmatic play', 'mahjong ways', 'scatter hitam',
-            'zeus slot', 'slot olympus', 'parlay', 'mix parlay', 'sbobet',
-            'casino online', 'kasino online', 'link alternatif',
-            'jamin wd', 'wd cepat', 'garansi kekalahan', 'akun pro vip',
-            'server thailand', 'slot88', 'slot777', 'raja slot',
-            'dewa slot', 'agen slot', 'taruhan bola', 'judi bola',
-            'freebet', 'freespin', 'jackpot progresif', 'chip gratis',
-        ],
+        // Semua teks selalu dikirim ke model (keputusan user
+        // 2026-11-17): tidak ada lagi gerbang kata kunci. Leksikon
+        // judol yang dulu dipakai KeywordGate dihapus bersama
+        // gerbangnya; riwayatnya tersimpan di git.
+
     ];
 
     return $config;

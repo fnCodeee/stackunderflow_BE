@@ -4,7 +4,7 @@
  * tests/ai_moderation_unit.php
  * ─────────────────────────────────────────────────────────────────────────────
  * Unit test logika murni AI Moderator: pemetaan skor -> keputusan,
- * penggabungan skor, KeywordGate, dan parser skor model.
+ * penggabungan skor dan parser skor model.
  * Tidak menyentuh database dan tidak memanggil API.
  *
  * Jalankan: php tests/ai_moderation_unit.php
@@ -29,9 +29,9 @@ function check(string $name, bool $ok): void
     }
 }
 
-function scores(int $judol = 0, int $seksual = 0, int $kekerasan = 0, int $miras = 0, int $berbahaya = 0, string $alasan = ''): array
+function scores(int $judol = 0, int $seksual = 0, int $kekerasan = 0, int $miras = 0, int $berbahaya = 0, int $kata_kasar = 0, string $alasan = ''): array
 {
-    return ['judol' => $judol, 'seksual' => $seksual, 'kekerasan' => $kekerasan, 'miras' => $miras, 'berbahaya' => $berbahaya, 'alasan' => $alasan];
+    return ['judol' => $judol, 'seksual' => $seksual, 'kekerasan' => $kekerasan, 'miras' => $miras, 'berbahaya' => $berbahaya, 'kata_kasar' => $kata_kasar, 'alasan' => $alasan];
 }
 
 // decide(): ambang remove 70, abu-abu 40.
@@ -51,19 +51,18 @@ check('merge satu set kosong', AiModerationService::mergeScores()['judol'] === 0
 // topCategory()
 check('topCategory miras', AiModerationService::topCategory(scores(judol: 10, miras: 77)) === 'miras');
 
-// keywordGateHit()
-check('gate kena: slot gacor', AiModerationService::keywordGateHit('PROMO slot gacor hari ini, maxwin terus', $cfg));
-check('gate kena: nomor WA', AiModerationService::keywordGateHit('daftar lewat wa 081234567890 ya', $cfg));
-check('gate kena: link wa.me', AiModerationService::keywordGateHit('klik wa.me/6281234567890', $cfg));
-check('gate lolos: slot waktu', !AiModerationService::keywordGateHit('Besok kita bahas slot waktu presentasi kelompok', $cfg));
-check('gate lolos: teks kuliah biasa', !AiModerationService::keywordGateHit('Belajar React bareng di perpustakaan, bawa laptop', $cfg));
+// kata_kasar (kebijakan v2, keputusan user 2026-11-17):
+// ringan masuk zona abu-abu, berat dihapus, harfiah lolos.
+check('kata_kasar 50 -> flag', AiModerationService::decide(scores(kata_kasar: 50), $cfg) === 'flag');
+check('kata_kasar 85 -> remove', AiModerationService::decide(scores(kata_kasar: 85), $cfg) === 'remove');
+check('kata_kasar 20 -> clean', AiModerationService::decide(scores(kata_kasar: 20), $cfg) === 'clean');
 
 // OpenRouterClient::parseScores()
-$parsed = OpenRouterClient::parseScores('{"judol": 95, "seksual": 0, "kekerasan": 0, "miras": 0, "berbahaya": 0, "alasan": "Iklan judi slot."}');
-check('parse JSON bersih', $parsed['judol'] === 95 && $parsed['alasan'] === 'Iklan judi slot.');
-$wrapped = OpenRouterClient::parseScores("Berikut hasilnya:\n{\"judol\": 10, \"seksual\": 0, \"kekerasan\": 0, \"miras\": 0, \"berbahaya\": 0, \"alasan\": \"Aman.\"}\nSemoga membantu.");
+$parsed = OpenRouterClient::parseScores('{"judol": 95, "seksual": 0, "kekerasan": 0, "miras": 0, "berbahaya": 0, "kata_kasar": 0, "alasan": "Iklan judi slot."}');
+check('parse JSON bersih', $parsed['judol'] === 95 && $parsed['kata_kasar'] === 0 && $parsed['alasan'] === 'Iklan judi slot.');
+$wrapped = OpenRouterClient::parseScores("Berikut hasilnya:\n{\"judol\": 10, \"seksual\": 0, \"kekerasan\": 0, \"miras\": 0, \"berbahaya\": 0, \"kata_kasar\": 0, \"alasan\": \"Aman.\"}\nSemoga membantu.");
 check('parse JSON terbungkus teks', $wrapped['judol'] === 10);
-$clamped = OpenRouterClient::parseScores('{"judol": 140, "seksual": -5, "kekerasan": 0, "miras": 0, "berbahaya": 0, "alasan": "x"}');
+$clamped = OpenRouterClient::parseScores('{"judol": 140, "seksual": -5, "kekerasan": 0, "miras": 0, "berbahaya": 0, "kata_kasar": 0, "alasan": "x"}');
 check('parse clamp 0-100', $clamped['judol'] === 100 && $clamped['seksual'] === 0);
 try {
     OpenRouterClient::parseScores('{"judol": 10}');

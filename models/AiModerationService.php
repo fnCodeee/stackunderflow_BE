@@ -7,7 +7,7 @@
  *
  * Alur: enqueue() dipanggil handler pembuatan konten -> worker
  * (scripts/ai_moderator_worker.php) mengklaim job -> gambar dinilai
- * model vision lewat rantai fallback, teks lewat KeywordGate ->
+ * model vision lewat rantai fallback, semua teks juga dinilai model ->
  * pelanggaran terbukti (>= 70) dieksekusi lewat
  * ModerationService::execute, jalur yang sama dengan admin manusia.
  * Zona abu-abu (40-69) tidak dihapus: dicatat sebagai flag untuk
@@ -25,7 +25,7 @@ require_once BASE_PATH . '/models/ModerationService.php';
 class AiModerationService
 {
     public const AI_USER_ID = '00000000-0000-4000-8000-0000000000a1';
-    public const CATEGORIES = ['judol', 'seksual', 'kekerasan', 'miras', 'berbahaya'];
+    public const CATEGORIES = ['judol', 'seksual', 'kekerasan', 'miras', 'berbahaya', 'kata_kasar'];
 
     private const TARGET_TABLES = [
         'post' => 'public_posts',
@@ -167,25 +167,7 @@ class AiModerationService
         return $top;
     }
 
-    /**
-     * KeywordGate: true bila teks layak dikirim ke model. Kena gate
-     * bukan vonis; model yang memutuskan.
-     */
-    public static function keywordGateHit(string $text, array $cfg): bool
-    {
-        $haystack = mb_strtolower($text);
-        foreach ($cfg['keywords'] as $keyword) {
-            if (str_contains($haystack, $keyword)) {
-                return true;
-            }
-        }
-        foreach (['#wa\.me/#i', '#chat\.whatsapp\.com#i', '#\b08\d{8,11}\b#'] as $pattern) {
-            if (preg_match($pattern, $text) === 1) {
-                return true;
-            }
-        }
-        return false;
-    }
+
 
     // ── Worker ──────────────────────────────────────────────────────
 
@@ -296,9 +278,11 @@ class AiModerationService
             self::storeCachedScores($hash, $result['scores'], $result['model']);
         }
 
+        // Semua teks selalu dinilai model (keputusan user
+        // 2026-11-17: rencananya memang semua konten dicek,
+        // bukan gambar saja; tidak ada gerbang kata kunci).
         $text = trim((string) $target['text']);
-        $gateHit = $text !== '' && self::keywordGateHit($text, $cfg);
-        if ($gateHit) {
+        if ($text !== '') {
             $result = self::judgeWithChain($cfg, null, $text);
             $scoreSets[] = $result['scores'];
             $setModels[] = $result['model'];
@@ -306,7 +290,7 @@ class AiModerationService
         }
 
         if ($scoreSets === []) {
-            self::recordVerdict($job, null, $cfg, null, 'clean', 'Tidak ada gambar; teks tidak memicu keyword gate.', null, [], self::elapsed($started));
+            self::recordVerdict($job, null, $cfg, null, 'clean', 'Tidak ada gambar dan tidak ada teks untuk dinilai.', null, [], self::elapsed($started));
             return;
         }
 
@@ -317,7 +301,7 @@ class AiModerationService
         // Eskalasi zona abu-abu: satu penilaian ulang oleh model
         // eskalasi sebelum menyerahkan ke manusia sebagai flag.
         if ($decision === 'flag' && $decidingModel !== $cfg['escalation_model']) {
-            $escalated = self::escalate($cfg, $type, $targetId, $gateHit ? $text : null);
+            $escalated = self::escalate($cfg, $type, $targetId, $text !== '' ? $text : null);
             if ($escalated !== null) {
                 $scoreSets[] = $escalated['scores'];
                 $setModels[] = $escalated['model'];

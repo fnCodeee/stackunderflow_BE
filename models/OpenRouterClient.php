@@ -102,7 +102,7 @@ class OpenRouterClient
             throw new RuntimeException('JSON respons model tidak valid.');
         }
         $scores = [];
-        foreach (['judol', 'seksual', 'kekerasan', 'miras', 'berbahaya'] as $key) {
+        foreach (['judol', 'seksual', 'kekerasan', 'miras', 'berbahaya', 'kata_kasar'] as $key) {
             if (!isset($parsed[$key]) || !is_numeric($parsed[$key])) {
                 throw new RuntimeException("Skor '$key' hilang dari respons model.");
             }
