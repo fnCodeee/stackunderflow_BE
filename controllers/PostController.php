@@ -17,6 +17,7 @@ require_once BASE_PATH . '/models/LikeModel.php';
 require_once BASE_PATH . '/models/CommentModel.php';
 require_once BASE_PATH . '/models/CommentLikeModel.php';
 require_once BASE_PATH . '/models/NotificationModel.php';
+require_once BASE_PATH . '/models/AiModerationService.php';
 require_once BASE_PATH . '/utils/Realtime.php';
 require_once BASE_PATH . '/utils/Response.php';
 
@@ -88,6 +89,11 @@ class PostController
                 'media_urls'       => array_values($mediaUrls),
                 'media_public_ids' => is_array($mediaPublicIds) ? array_values($mediaPublicIds) : [],
             ]);
+
+            // AI Moderator: antrekan post baru untuk diperiksa.
+            if (is_array($result) && !empty($result['id'])) {
+                AiModerationService::enqueue('post', (string) $result['id'], 'new_content');
+            }
 
             Response::json($result, 200, 'Postingan Berhasil dibuat', true);
         } catch (Throwable $e) {
@@ -314,6 +320,9 @@ class PostController
             if (!$result) {
                 Response::json(null, 404, 'Postingan tidak ditemukan!', false);
             }
+
+            // AI Moderator: konten berubah, antrekan penilaian ulang.
+            AiModerationService::enqueue('post', (string) $postId, 'edit');
 
             Response::json($result, 200, 'Berhasil diupdate!', true);
         } catch (Throwable $e) {
@@ -558,6 +567,11 @@ class PostController
                 $counts = PostModel::getCounts($postId);
                 Realtime::publishPostStats($postId, $counts['likes'], $counts['commentCount']);
             } catch (Throwable) {
+            }
+
+            // AI Moderator: antrekan komentar baru untuk diperiksa.
+            if (is_array($commentData) && !empty($commentData['id'])) {
+                AiModerationService::enqueue('comment', (string) $commentData['id'], 'new_content');
             }
 
             Response::json($commentData, 200, 'Success create comment!', true);

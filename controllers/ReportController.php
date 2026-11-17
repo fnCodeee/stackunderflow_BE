@@ -12,6 +12,7 @@
 declare(strict_types=1);
 
 require_once BASE_PATH . '/models/ReportModel.php';
+require_once BASE_PATH . '/models/AiModerationService.php';
 require_once BASE_PATH . '/models/PostModel.php';
 require_once BASE_PATH . '/models/CommentModel.php';
 require_once BASE_PATH . '/models/CollabModel.php';
@@ -76,6 +77,13 @@ class ReportController
             }
 
             $report = ReportModel::create($reporterId, $targetType, $targetId, $reason);
+
+            // AI Moderator: verifikasi laporan ini dulu (prioritas
+            // tinggi). Yang dinilai adalah konten yang dilaporkan;
+            // laporan itu sendiri tidak pernah dihapus AI.
+            if ($targetType !== 'user' && is_array($report) && !empty($report['id'])) {
+                AiModerationService::enqueue($targetType, $targetId, 'report', (string) $report['id']);
+            }
             Response::json(['report' => $report], 201, 'Laporan terkirim. Terima kasih!', true);
         } catch (Throwable $e) {
             error_log('[REPORT ERROR] ' . $e->getMessage());

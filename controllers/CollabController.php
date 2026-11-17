@@ -16,6 +16,7 @@ require_once BASE_PATH . '/models/CollabModel.php';
 require_once BASE_PATH . '/models/InboxModel.php';
 require_once BASE_PATH . '/models/NotificationModel.php';
 require_once BASE_PATH . '/models/SkillModel.php';
+require_once BASE_PATH . '/models/AiModerationService.php';
 require_once BASE_PATH . '/utils/Response.php';
 
 class CollabController
@@ -144,6 +145,11 @@ class CollabController
                 'media_public_ids' => is_array($mediaPublicIds) ? array_values($mediaPublicIds) : [],
                 'skills_needed'    => $uniqueSkillIds,
             ]);
+
+            // AI Moderator: antrekan kolaborasi baru untuk diperiksa.
+            if (is_array($result) && !empty($result['id'])) {
+                AiModerationService::enqueue('collab', (string) $result['id'], 'new_content');
+            }
 
             Response::json($result, 200, 'Collaboration created successfully', true);
         } catch (InvalidArgumentException $e) {
@@ -603,6 +609,9 @@ class CollabController
             // Ambil data terbaru
             $updated = CollabModel::findById($collabId);
             if ($updated) {
+                // AI Moderator: konten berubah, antrekan penilaian ulang.
+                AiModerationService::enqueue('collab', (string) $collabId, 'edit');
+
                 Response::json($updated, 200, 'Postingan kolaborasi berhasil diperbarui!', true);
             } else {
                 Response::json(null, 404, 'Postingan kolaborasi tidak ditemukan!', false);
