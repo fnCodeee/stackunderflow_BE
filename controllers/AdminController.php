@@ -56,6 +56,7 @@ class AdminController
                         'id' => $me['id'],
                         'username' => $me['username'],
                         'role' => $me['role'] ?? 'user',
+                        'photo' => $me['photo_profile_url'] ?? null,
                     ];
                 }
             }
