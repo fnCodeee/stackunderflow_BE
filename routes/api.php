@@ -30,6 +30,7 @@ require_once BASE_PATH . '/controllers/AdminController.php';
 require_once BASE_PATH . '/controllers/AdminModerationController.php';
 require_once BASE_PATH . '/controllers/AppealsController.php';
 require_once BASE_PATH . '/controllers/AdminAppealsController.php';
+require_once BASE_PATH . '/controllers/AdminAiModerationController.php';
 
 // ── Health Check: GET / ───────────────────────────────────────────────────────
 $router->get('/', function (array $params): void {
@@ -227,3 +228,8 @@ $router->get('/api/admin/reports', [AdminMiddleware::class, 'handle'], [AdminMod
 $router->post('/api/admin/reports/:id/dismiss', [AdminMiddleware::class, 'handle'], [AdminMiddleware::class, 'requireSuper'], [AdminModerationController::class, 'dismissReport']);
 $router->get('/api/admin/appeals', [AdminMiddleware::class, 'handle'], [AdminAppealsController::class, 'index']);
 $router->post('/api/admin/appeals/:id/decide', [AdminMiddleware::class, 'handle'], [AdminMiddleware::class, 'requireSuper'], [AdminAppealsController::class, 'decide']);
+$router->get('/api/admin/ai-moderation/overview', [AdminMiddleware::class, 'handle'], [AdminAiModerationController::class, 'overview']);
+$router->get('/api/admin/ai-moderation/verdicts', [AdminMiddleware::class, 'handle'], [AdminAiModerationController::class, 'verdicts']);
+$router->get('/api/admin/ai-moderation/flags', [AdminMiddleware::class, 'handle'], [AdminAiModerationController::class, 'flags']);
+$router->post('/api/admin/ai-moderation/jobs/:id/retry', [AdminMiddleware::class, 'handle'], [AdminMiddleware::class, 'requireSuper'], [AdminAiModerationController::class, 'retryJob']);
+$router->post('/api/admin/ai-moderation/flags/:id/resolve', [AdminMiddleware::class, 'handle'], [AdminMiddleware::class, 'requireSuper'], [AdminAiModerationController::class, 'resolveFlag']);
