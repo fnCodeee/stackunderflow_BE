@@ -75,6 +75,7 @@ class AiModerationService
                              trigger_source = IF(? = 'report', 'report', trigger_source)
                          WHERE id = ?"
                     )->execute([$priority, $reportId, $trigger, $existing['id']]);
+                    self::spawnWorker();
                 }
                 return;
             }
@@ -83,12 +84,37 @@ class AiModerationService
                 "INSERT INTO ai_moderation_jobs (id, target_type, target_id, trigger_source, report_id, priority)
                  VALUES (?, ?, ?, ?, ?, ?)"
             )->execute([ModerationService::uuid(), $targetType, $targetId, $trigger, $reportId, $priority]);
+            self::spawnWorker();
         } catch (Throwable $e) {
             error_log('[AiModeration] enqueue gagal: ' . $e->getMessage());
         }
     }
 
     // ── Logika keputusan murni (seam unit test) ─────────────────────
+
+    // ── Pemicu event (keputusan user + Jev 2026-11-17) ─────────────
+    // Setiap job baru langsung membangunkan worker di background;
+    // request HTTP tidak menunggu penilaian sama sekali. Sisa job
+    // yang gagal atau menunggu backoff disapu pemicu berkala per jam
+    // (Task Scheduler / cron). Gagal spawn tidak pernah menggagalkan
+    // pembuatan konten: semua jalur di sini menelan error.
+    private static function spawnWorker(): void
+    {
+        try {
+            $php = PHP_BINARY !== '' ? PHP_BINARY : 'php';
+            $script = dirname(__DIR__) . '/scripts/ai_moderator_worker.php';
+            if (PHP_OS_FAMILY === 'Windows') {
+                $handle = popen('start /B "" "' . $php . '" "' . $script . '" > NUL 2>&1', 'r');
+                if ($handle !== false) {
+                    pclose($handle);
+                }
+            } else {
+                exec('"' . $php . '" "' . $script . '" > /dev/null 2>&1 &');
+            }
+        } catch (Throwable $e) {
+            error_log('[AiModeration] spawn worker gagal: ' . $e->getMessage());
+        }
+    }
 
     public static function decide(array $scores, array $cfg): string
     {

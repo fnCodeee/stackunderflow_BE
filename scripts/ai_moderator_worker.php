@@ -4,8 +4,9 @@
  * scripts/ai_moderator_worker.php
  * ─────────────────────────────────────────────────────────────────────────────
  * Worker AI Moderator, model OneShotCron (keputusan Jev 2026-11-17):
- * proses maksimal N job pending lalu keluar. Dipicu tiap menit oleh
- * Windows Task Scheduler (dev) atau cron (produksi). Sekali jalan =
+ * proses maksimal N job pending lalu keluar. Dipicu event: setiap
+ * enqueue membangunkan worker ini di background; sisa job disapu
+ * Task Scheduler per jam (dev) atau cron (produksi). Sekali jalan =
  * tidak ada proses menggantung yang harus diawasi; crash hanya
  * membunuh satu run.
  *
