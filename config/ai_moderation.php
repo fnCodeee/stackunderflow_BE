@@ -30,16 +30,41 @@ function aiModerationConfig(): array
         'enabled' => (($_ENV['AI_MOD_ENABLED'] ?? '0') === '1'),
         'api_key' => (string) ($_ENV['OPENROUTER_API_KEY'] ?? ''),
         'endpoint' => 'https://openrouter.ai/api/v1/chat/completions',
-        // Rantai model: free utama -> berbayar -> free cadangan.
+        // Provider kedua (2026-11-17): xKiro, agregator kompatibel
+        // OpenAI. Model yang terdaftar di 'model_providers' dipanggil
+        // lewat xKiro, sisanya lewat OpenRouter seperti sebelumnya.
+        'xkiro_api_key' => (string) ($_ENV['XKIRO_API_KEY'] ?? ''),
+        'xkiro_endpoint' => 'https://api.xkiro.com/v1/chat/completions',
+        'model_providers' => [
+            'mistralai/mistral-medium-3.5' => 'xkiro',
+        ],
+        // Rantai model: utama xKiro (free, jatah token harian) ->
+        // free OpenRouter -> berbayar -> free cadangan OpenRouter.
+        // Primary pindah dari Nemotron ke Mistral Medium 3.5 setelah
+        // model itu lolos bake-off 20 gambar dan probe teks
+        // 2026-11-17 dengan hasil setara Nemotron (perintah user).
         'models' => [
+            'mistralai/mistral-medium-3.5',
             'nvidia/nemotron-3.5-super-vl:free',
             'qwen/qwen3.8-omni-flash',
             'inclusionai/ling-3.2-flash:free',
         ],
-        'primary_model' => 'nvidia/nemotron-3.5-super-vl:free',
-        'escalation_model' => 'qwen/qwen3.8-omni-flash',
-        // Batas lunak verdict model free per hari (jaga kuota free
-        // OpenRouter 50/hari untuk akun di bawah $10 kredit).
+        'primary_model' => 'mistralai/mistral-medium-3.5',
+        // Eskalasi zona abu-abu sekarang Nemotron (free OpenRouter).
+        // Qwen berbayar menjadi eskalasi cadangan saat rem kuota
+        // free OpenRouter aktif, sekaligus fallback rantai.
+        'escalation_model' => 'nvidia/nemotron-3.5-super-vl:free',
+        'escalation_fallback_model' => 'qwen/qwen3.8-omni-flash',
+        // Model free yang memakan kuota free OpenRouter (50/hari
+        // untuk akun di bawah $10 kredit). Rem di bawah menjaga
+        // kuota ini, bukan lagi primary.
+        'openrouter_free_models' => [
+            'nvidia/nemotron-3.5-super-vl:free',
+            'inclusionai/ling-3.2-flash:free',
+        ],
+        // Batas lunak verdict yang diputuskan model free OpenRouter
+        // per hari. Mencapai angka ini menyisihkan model free
+        // OpenRouter dari rantai dan memindahkan eskalasi ke Qwen.
         'free_daily_soft_cap' => 45,
         'threshold_remove' => 70,
         'threshold_grey' => 40,

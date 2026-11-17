@@ -138,6 +138,33 @@ class AiModerationService
         return 'clean';
     }
 
+    /**
+     * Rantai model efektif. Saat rem kuota free OpenRouter aktif,
+     * model free OpenRouter disisihkan dari rantai; primary xKiro
+     * dan Qwen berbayar tetap tersedia.
+     */
+    public static function chainFor(array $cfg, bool $capReached): array
+    {
+        $models = array_values($cfg['models']);
+        if (!$capReached) {
+            return $models;
+        }
+        $free = $cfg['openrouter_free_models'] ?? [];
+        return array_values(array_filter($models, static fn ($m) => !in_array($m, $free, true)));
+    }
+
+    /**
+     * Model eskalasi zona abu-abu yang efektif: Nemotron selama
+     * kuota free OpenRouter belum menyentuh rem, Qwen berbayar
+     * sesudahnya.
+     */
+    public static function effectiveEscalationModel(array $cfg, bool $capReached): string
+    {
+        return $capReached
+            ? (string) ($cfg['escalation_fallback_model'] ?? $cfg['escalation_model'])
+            : (string) $cfg['escalation_model'];
+    }
+
     /** Gabung beberapa set skor: per kategori ambil maksimum. */
     public static function mergeScores(array ...$sets): array
     {
@@ -307,7 +334,8 @@ class AiModerationService
 
         // Eskalasi zona abu-abu: satu penilaian ulang oleh model
         // eskalasi sebelum menyerahkan ke manusia sebagai flag.
-        if ($decision === 'flag' && $decidingModel !== $cfg['escalation_model']) {
+        $capReached = self::openRouterFreeVerdictsToday($cfg) >= (int) $cfg['free_daily_soft_cap'];
+        if ($decision === 'flag' && $decidingModel !== self::effectiveEscalationModel($cfg, $capReached)) {
             $escalated = self::escalate($cfg, $type, $targetId, $text !== '' ? $text : null);
             if ($escalated !== null) {
                 $scoreSets[] = $escalated['scores'];
@@ -371,6 +399,10 @@ class AiModerationService
     private static function escalate(array $cfg, string $type, string $targetId, ?string $gatedText): ?array
     {
         try {
+            $model = self::effectiveEscalationModel(
+                $cfg,
+                self::openRouterFreeVerdictsToday($cfg) >= (int) $cfg['free_daily_soft_cap']
+            );
             $sets = [];
             $usage = [];
             foreach (self::imageUrls($type, $targetId, $cfg) as $url) {
@@ -378,19 +410,19 @@ class AiModerationService
                 if ($bytes === null) {
                     continue;
                 }
-                $result = OpenRouterClient::judge($cfg, (string) $cfg['escalation_model'], $bytes, null);
+                $result = OpenRouterClient::judge($cfg, $model, $bytes, null);
                 $sets[] = $result['scores'];
                 $usage[] = $result['usage'];
             }
             if ($gatedText !== null && $gatedText !== '') {
-                $result = OpenRouterClient::judge($cfg, (string) $cfg['escalation_model'], null, $gatedText);
+                $result = OpenRouterClient::judge($cfg, $model, null, $gatedText);
                 $sets[] = $result['scores'];
                 $usage[] = $result['usage'];
             }
             if ($sets === []) {
                 return null;
             }
-            return ['scores' => self::mergeScores(...$sets), 'model' => (string) $cfg['escalation_model'], 'usage' => $usage];
+            return ['scores' => self::mergeScores(...$sets), 'model' => $model, 'usage' => $usage];
         } catch (Throwable $e) {
             error_log('[AiModeration] eskalasi gagal: ' . $e->getMessage());
             return null;
@@ -398,15 +430,13 @@ class AiModerationService
     }
 
     /**
-     * Nilai satu sumber lewat rantai model. Bila kuota lunak model
-     * free hari ini habis, rantai mulai dari model berbayar.
+     * Nilai satu sumber lewat rantai model. Rantai efektif dari
+     * chainFor(): primary xKiro selalu pertama; model free
+     * OpenRouter ikut hanya selama rem kuotanya belum tercapai.
      */
     private static function judgeWithChain(array $cfg, ?string $imageBytes, ?string $text): array
     {
-        $models = $cfg['models'];
-        if (self::freeVerdictsToday($cfg) >= (int) $cfg['free_daily_soft_cap']) {
-            $models = array_values(array_filter($models, static fn ($m) => $m !== $cfg['primary_model']));
-        }
+        $models = self::chainFor($cfg, self::openRouterFreeVerdictsToday($cfg) >= (int) $cfg['free_daily_soft_cap']);
         $last = null;
         foreach ($models as $model) {
             try {
@@ -426,16 +456,22 @@ class AiModerationService
     }
 
     /**
-     * Perkiraan pemakaian model free hari ini dari verdict yang
-     * tercatat. Bukan penghitung panggilan mentah, tapi cukup untuk
-     * rem kuota pada volume saat ini.
+     * Perkiraan pemakaian kuota free OpenRouter hari ini: verdict
+     * yang diputuskan model free OpenRouter (eskalasi Nemotron dan
+     * cadangan Ling). Bukan penghitung panggilan mentah, tapi cukup
+     * untuk rem kuota pada volume saat ini.
      */
-    private static function freeVerdictsToday(array $cfg): int
+    private static function openRouterFreeVerdictsToday(array $cfg): int
     {
+        $free = array_values($cfg['openrouter_free_models'] ?? []);
+        if ($free === []) {
+            return 0;
+        }
+        $placeholders = implode(', ', array_fill(0, count($free), '?'));
         $stmt = getDB()->prepare(
-            "SELECT COUNT(*) FROM ai_moderation_verdicts WHERE model = ? AND created_at >= CURDATE()"
+            "SELECT COUNT(*) FROM ai_moderation_verdicts WHERE model IN ($placeholders) AND created_at >= CURDATE()"
         );
-        $stmt->execute([$cfg['primary_model']]);
+        $stmt->execute($free);
         return (int) $stmt->fetchColumn();
     }
 

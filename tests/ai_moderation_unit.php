@@ -79,5 +79,18 @@ try {
     check('parse sampah -> exception', true);
 }
 
+// Routing provider (2026-11-17): primary pindah ke xKiro, eskalasi
+// zona abu-abu ke Nemotron, rem kuota menjaga free OpenRouter.
+check('provider mistral -> xkiro', OpenRouterClient::providerFor($cfg, 'mistralai/mistral-medium-3.5') === 'xkiro');
+check('provider nemotron -> openrouter', OpenRouterClient::providerFor($cfg, 'nvidia/nemotron-3.5-super-vl:free') === 'openrouter');
+check('primary mistral medium', $cfg['primary_model'] === 'mistralai/mistral-medium-3.5');
+check('eskalasi nemotron', $cfg['escalation_model'] === 'nvidia/nemotron-3.5-super-vl:free');
+$chainFull = AiModerationService::chainFor($cfg, false);
+check('rantai penuh mulai dari mistral', $chainFull[0] === 'mistralai/mistral-medium-3.5' && count($chainFull) === 4);
+$chainCapped = AiModerationService::chainFor($cfg, true);
+check('rantai rem aktif tanpa free openrouter', !in_array('nvidia/nemotron-3.5-super-vl:free', $chainCapped, true) && !in_array('inclusionai/ling-3.2-flash:free', $chainCapped, true) && in_array('mistralai/mistral-medium-3.5', $chainCapped, true) && in_array('qwen/qwen3.8-omni-flash', $chainCapped, true));
+check('eskalasi efektif tanpa rem nemotron', AiModerationService::effectiveEscalationModel($cfg, false) === 'nvidia/nemotron-3.5-super-vl:free');
+check('eskalasi efektif rem aktif qwen', AiModerationService::effectiveEscalationModel($cfg, true) === 'qwen/qwen3.8-omni-flash');
+
 echo $failures === 0 ? "\nSEMUA LULUS\n" : "\n$failures GAGAL\n";
 exit($failures === 0 ? 0 : 1);

@@ -3,7 +3,9 @@
 /**
  * models/OpenRouterClient.php
  * ─────────────────────────────────────────────────────────────────────────────
- * Klien tipis OpenRouter chat completions untuk penilaian moderasi.
+ * Klien tipis chat completions untuk penilaian moderasi. Dua
+ * provider kompatibel OpenAI dipakai: OpenRouter dan xKiro;
+ * provider dipilih per model dari config 'model_providers'.
  * Satu method: judge() menilai satu konten (gambar dan/atau teks)
  * dengan satu model dan mengembalikan skor terstruktur.
  * Semua kegagalan (HTTP, jaringan, JSON rusak) dilempar sebagai
@@ -19,12 +21,47 @@ class OpenRouterClient
     /**
      * @return array{scores: array, usage: array, latency_ms: int}
      */
-    public static function judge(array $cfg, string $model, ?string $imageBytes, ?string $text): array
+    /** Provider penampung model: 'xkiro' atau 'openrouter'. */
+    public static function providerFor(array $cfg, string $model): string
     {
+        $provider = $cfg['model_providers'][$model] ?? 'openrouter';
+        return $provider === 'xkiro' ? 'xkiro' : 'openrouter';
+    }
+
+    /**
+     * Rute panggilan untuk satu model: endpoint, API key, dan label
+     * provider untuk pesan error.
+     *
+     * @return array{endpoint: string, api_key: string, label: string}
+     */
+    private static function route(array $cfg, string $model): array
+    {
+        if (self::providerFor($cfg, $model) === 'xkiro') {
+            $apiKey = (string) ($cfg['xkiro_api_key'] ?? '');
+            if ($apiKey === '') {
+                throw new RuntimeException('XKIRO_API_KEY kosong.');
+            }
+            return [
+                'endpoint' => (string) ($cfg['xkiro_endpoint'] ?? 'https://api.xkiro.com/v1/chat/completions'),
+                'api_key' => $apiKey,
+                'label' => 'xKiro',
+            ];
+        }
         $apiKey = (string) ($cfg['api_key'] ?? '');
         if ($apiKey === '') {
             throw new RuntimeException('OPENROUTER_API_KEY kosong.');
         }
+        return [
+            'endpoint' => (string) $cfg['endpoint'],
+            'api_key' => $apiKey,
+            'label' => 'OpenRouter',
+        ];
+    }
+
+    public static function judge(array $cfg, string $model, ?string $imageBytes, ?string $text): array
+    {
+        $route = self::route($cfg, $model);
+        $apiKey = $route['api_key'];
 
         $userText = 'Nilai konten ini sesuai kebijakan. Balas hanya JSON.';
         if ($text !== null && trim($text) !== '') {
@@ -48,17 +85,24 @@ class OpenRouterClient
             ],
         ];
 
+        $headers = [
+            'Content-Type: application/json',
+            'Authorization: Bearer ' . $apiKey,
+        ];
+        if ($route['label'] === 'xKiro') {
+            // Cloudflare di depan api.xkiro.com menolak user agent
+            // bawaan cURL (error 1010); UA browser wajib disertakan.
+            $headers[] = 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
+        }
+
         $started = microtime(true);
-        $ch = curl_init((string) $cfg['endpoint']);
+        $ch = curl_init($route['endpoint']);
         curl_setopt_array($ch, [
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => json_encode($payload),
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT => (int) $cfg['timeout_seconds'],
-            CURLOPT_HTTPHEADER => [
-                'Content-Type: application/json',
-                'Authorization: Bearer ' . $apiKey,
-            ],
+            CURLOPT_HTTPHEADER => $headers,
         ]);
         $body = curl_exec($ch);
         $errno = curl_errno($ch);
@@ -68,16 +112,16 @@ class OpenRouterClient
         $latencyMs = (int) round((microtime(true) - $started) * 1000);
 
         if ($body === false || $errno !== 0) {
-            throw new RuntimeException("OpenRouter jaringan gagal (model $model): $error");
+            throw new RuntimeException($route['label'] . " jaringan gagal (model $model): $error");
         }
         if ($code !== 200) {
-            throw new RuntimeException("OpenRouter HTTP $code (model $model)");
+            throw new RuntimeException($route['label'] . " HTTP $code (model $model)");
         }
 
         $decoded = json_decode((string) $body, true);
         $raw = $decoded['choices'][0]['message']['content'] ?? null;
         if (!is_string($raw) || trim($raw) === '') {
-            throw new RuntimeException("OpenRouter respons kosong (model $model)");
+            throw new RuntimeException($route['label'] . " respons kosong (model $model)");
         }
 
         return [
