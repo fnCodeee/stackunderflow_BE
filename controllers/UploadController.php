@@ -39,6 +39,21 @@ class UploadController
     /** Folder Cloudinary tempat gambar disimpan. */
     private const CLOUDINARY_FOLDER = 'underflow';
 
+    /** Folder Cloudinary akun proyek tempat lampiran Circle disimpan. */
+    private const FILES_FOLDER = 'assets/messageCircle';
+
+    /** Jumlah lampiran maksimum per pesan zone. */
+    private const ATTACHMENT_MAX_PER_MESSAGE = 3;
+
+    /** Ukuran maksimum per lampiran: 5 MB. */
+    private const ATTACHMENT_MAX_SIZE = 5 * 1024 * 1024;
+
+    /** Ekstensi lampiran gambar yang diterima. */
+    private const ATTACHMENT_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg'];
+
+    /** Ekstensi lampiran dokumen yang diterima. */
+    private const ATTACHMENT_DOCUMENT_EXTENSIONS = ['pdf', 'doc', 'docx', 'xls', 'xlsx'];
+
     /**
      * Handler untuk POST /api/upload
      * Mengunggah SATU file gambar (field multipart `file`) ke Cloudinary
@@ -285,6 +300,166 @@ class UploadController
             error_log('[SERVER ERROR] ' . $e->getMessage());
             Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
+    }
+
+    /**
+     * Membaca konfigurasi akun Cloudinary KHUSUS PROYEK dari .env
+     * (CLOUDINARY_FILES_*). Akun ini terpisah dari akun utama:
+     * khusus lampiran Circle, supaya kuotanya tidak bercampur
+     * dengan foto profil dan gambar post.
+     *
+     * @return array{cloud_name: string, api_key: string, api_secret: string}
+     */
+    private static function filesCloudinaryConfig(): array
+    {
+        return [
+            'cloud_name' => trim((string) (getenv('CLOUDINARY_FILES_CLOUD_NAME') ?: '')),
+            'api_key'    => trim((string) (getenv('CLOUDINARY_FILES_API_KEY') ?: '')),
+            'api_secret' => trim((string) (getenv('CLOUDINARY_FILES_API_SECRET') ?: '')),
+        ];
+    }
+
+    /**
+     * Handler untuk POST /api/upload/attachment-signature
+     *
+     * Tanda tangan unggah lampiran Circle, meniru signature() tetapi
+     * untuk akun Cloudinary proyek dan folder assets/messageCircle.
+     * Frontend memakai tanda tangan yang sama untuk mengunggah
+     * gambar (endpoint image) maupun dokumen (endpoint raw) langsung
+     * ke Cloudinary; file tidak mampir ke server ini. Penerbitan
+     * dicatat di tabel upload_grants dan dibatasi per jam seperti
+     * tanda tangan gambar.
+     *
+     * @param  array<string, string> $params Path parameters dari Router
+     * @return void
+     */
+    public static function attachmentSignature(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $config = self::filesCloudinaryConfig();
+            if ($config['cloud_name'] === '' || $config['api_key'] === '' || $config['api_secret'] === '') {
+                Response::json(null, 500, 'Upload lampiran belum dikonfigurasi.', false);
+            }
+
+            $pdo = getDB();
+
+            $stmt = $pdo->prepare(
+                'SELECT COUNT(*) FROM upload_grants WHERE user_id = :uid AND created_at > (NOW() - INTERVAL 1 HOUR)'
+            );
+            $stmt->execute([':uid' => $userId]);
+            if ((int)$stmt->fetchColumn() >= self::SIGNATURE_LIMIT_PER_HOUR) {
+                Response::json(null, 429, 'Terlalu banyak permintaan upload. Coba lagi nanti.', false);
+            }
+
+            $timestamp = time();
+            $tags      = 'user_' . $userId;
+            $paramsToSign = 'folder=' . self::FILES_FOLDER . '&tags=' . $tags . '&timestamp=' . $timestamp;
+            $signature = sha1($paramsToSign . $config['api_secret']);
+
+            $stmt = $pdo->prepare('INSERT INTO upload_grants (user_id) VALUES (:uid)');
+            $stmt->execute([':uid' => $userId]);
+
+            Response::json([
+                'cloud_name' => $config['cloud_name'],
+                'api_key'    => $config['api_key'],
+                'timestamp'  => $timestamp,
+                'signature'  => $signature,
+                'folder'     => self::FILES_FOLDER,
+                'tags'       => $tags,
+            ], 200, 'Tanda tangan upload lampiran diterbitkan', true);
+        } catch (Throwable $e) {
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
+        }
+    }
+
+    /**
+     * Validasi daftar lampiran yang dikirim client saat mengirim
+     * pesan zone. Setiap lampiran harus berasal dari akun Cloudinary
+     * proyek (URL + public_id dari folder assets/messageCircle),
+     * jenisnya image (png/jpg/jpeg, endpoint image) atau document
+     * (pdf/doc/docx/xls/xlsx, endpoint raw), dan ukurannya yang
+     * dilaporkan client maksimal 5 MB. Maksimal 3 lampiran.
+     * Mengembalikan daftar yang sudah dinormalisasi untuk disimpan.
+     * Dipanggil dari CircleController::sendMessage.
+     *
+     * @param  array<int, mixed> $items
+     * @return array<int, array{url: string, public_id: string, file_name: string, kind: string, size_bytes: int}>
+     *         Response::json di dalamnya selalu exit saat tidak valid.
+     */
+    public static function assertValidAttachments(array $items): array
+    {
+        if (count($items) > self::ATTACHMENT_MAX_PER_MESSAGE) {
+            Response::json(null, 400, 'Maksimal 3 lampiran per pesan.', false);
+        }
+
+        if ($items === []) {
+            return [];
+        }
+
+        $config = self::filesCloudinaryConfig();
+        if ($config['cloud_name'] === '') {
+            Response::json(null, 500, 'Upload lampiran belum dikonfigurasi.', false);
+        }
+
+        $normalized = [];
+        foreach ($items as $item) {
+            if (!is_array($item)) {
+                Response::json(null, 400, 'Lampiran tidak valid.', false);
+            }
+
+            $url       = (string) ($item['url'] ?? '');
+            $publicId  = (string) ($item['publicId'] ?? '');
+            $fileName  = trim((string) ($item['fileName'] ?? ''));
+            $kind      = (string) ($item['kind'] ?? '');
+            $sizeBytes = (int) ($item['sizeBytes'] ?? 0);
+
+            if ($kind !== 'image' && $kind !== 'document') {
+                Response::json(null, 400, 'Jenis lampiran tidak valid.', false);
+            }
+
+            $extension = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+            $allowedExtensions = $kind === 'image'
+                ? self::ATTACHMENT_IMAGE_EXTENSIONS
+                : self::ATTACHMENT_DOCUMENT_EXTENSIONS;
+            if (!in_array($extension, $allowedExtensions, true)) {
+                Response::json(null, 400, 'Format lampiran tidak didukung.', false);
+            }
+
+            $prefix = 'https://res.cloudinary.com/' . $config['cloud_name']
+                . ($kind === 'image' ? '/image/upload/' : '/raw/upload/');
+            if (!str_starts_with($url, $prefix)) {
+                Response::json(null, 400, 'URL lampiran tidak valid.', false);
+            }
+
+            if (!str_starts_with($publicId, self::FILES_FOLDER . '/')) {
+                Response::json(null, 400, 'Lampiran tidak valid.', false);
+            }
+
+            if ($fileName === '' || mb_strlen($fileName) > 255) {
+                Response::json(null, 400, 'Nama lampiran tidak valid.', false);
+            }
+
+            if ($sizeBytes <= 0 || $sizeBytes > self::ATTACHMENT_MAX_SIZE) {
+                Response::json(null, 400, 'Ukuran lampiran maksimal 5 MB.', false);
+            }
+
+            $normalized[] = [
+                'url'        => $url,
+                'public_id'  => $publicId,
+                'file_name'  => $fileName,
+                'kind'       => $kind,
+                'size_bytes' => $sizeBytes,
+            ];
+        }
+
+        return $normalized;
     }
 
     /**

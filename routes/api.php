@@ -157,6 +157,8 @@ $router->delete('/api/inbox/conversations/:id', [AuthMiddleware::class, 'handle'
 $router->post('/api/upload', [AuthMiddleware::class, 'handle'], [UploadController::class, 'uploadImage']);
 // Tanda tangan untuk upload langsung ke Cloudinary (auth required) - file tidak lewat server.
 $router->post('/api/upload/signature', [AuthMiddleware::class, 'handle'], [UploadController::class, 'signature']);
+// Tanda tangan upload lampiran Circle ke akun Cloudinary proyek (auth required).
+$router->post('/api/upload/attachment-signature', [AuthMiddleware::class, 'handle'], [UploadController::class, 'attachmentSignature']);
 
 // ── COLLABORATIONS MODULE ─────────────────────────────────────────────────────
 // Phase 4C: Create Collaboration + Auto-create Circle

@@ -23,8 +23,10 @@
  *
  * Phase 2 (messaging): POST/GET pesan per zone di controller ini
  * juga. Pesan tersimpan disiarkan live lewat utils/Realtime
- * (event zone-message) ke semua anggota. Reactions/pin/attachments
- * tetap belum ada (Phase 3).
+ * (event zone-message) ke semua anggota. Lampiran file menyusul
+ * 2026-11-19: maksimal 3 file per pesan dari akun Cloudinary
+ * khusus proyek (folder assets/messageCircle). Reactions/pin
+ * tetap belum ada.
  * =============================================================================
  */
 
@@ -35,6 +37,8 @@ require_once BASE_PATH . '/models/CircleModel.php';
 require_once BASE_PATH . '/models/CircleZoneModel.php';
 require_once BASE_PATH . '/models/ZoneReadModel.php';
 require_once BASE_PATH . '/models/ZoneMessageModel.php';
+require_once BASE_PATH . '/models/ZoneMessageAttachmentModel.php';
+require_once BASE_PATH . '/controllers/UploadController.php';
 require_once BASE_PATH . '/utils/Realtime.php';
 require_once BASE_PATH . '/utils/Response.php';
 
@@ -301,13 +305,22 @@ class CircleController
                 ? ZoneMessageModel::findManyByIds(array_keys($replyIds))
                 : [];
 
+            // Lampirkan file lampiran halaman ini dalam satu query.
+            $attachmentMap = ZoneMessageAttachmentModel::forMessages(
+                array_map(
+                    static fn (array $r): string => (string) $r['id'],
+                    $rows
+                )
+            );
+
             $messages = array_map(
                 static fn (array $r): array => self::presentMessage(
                     $r,
                     !empty($r['reply_to_id'])
                         ? ($replyMap[(string) $r['reply_to_id']] ?? null)
                         : null,
-                    $ownerId
+                    $ownerId,
+                    $attachmentMap[(string) $r['id']] ?? []
                 ),
                 array_reverse($rows)
             );
@@ -352,9 +365,6 @@ class CircleController
 
             $body = $GLOBALS['body'] ?? [];
             $content = trim((string) ($body['content'] ?? ''));
-            if ($content === '') {
-                Response::json(null, 400, 'Message cannot be empty', false);
-            }
             if (mb_strlen($content) > 2000) {
                 Response::json(null, 400, 'Message is too long (max 2000 characters)', false);
             }
@@ -371,16 +381,49 @@ class CircleController
                 }
             }
 
-            $row = ZoneMessageModel::create(
-                (string) $zone['id'],
-                (string) $userId,
-                $content,
-                $replyToId !== '' ? $replyToId : null
-            );
+            // Lampiran opsional: daftar hasil unggahan langsung ke
+            // akun Cloudinary proyek, divalidasi di sini (asal akun,
+            // folder, format, ukuran, jumlah) sebelum apa pun
+            // tersimpan. Pesan boleh berisi lampiran saja tanpa
+            // teks; pesan yang benar-benar kosong tetap ditolak.
+            $rawAttachments = $body['attachments'] ?? [];
+            if (!is_array($rawAttachments)) {
+                Response::json(null, 400, 'Attachments must be a list', false);
+            }
+            $attachments = UploadController::assertValidAttachments($rawAttachments);
+
+            if ($content === '' && $attachments === []) {
+                Response::json(null, 400, 'Message cannot be empty', false);
+            }
+
+            $pdo = getDB();
+            $pdo->beginTransaction();
+            try {
+                $row = ZoneMessageModel::create(
+                    (string) $zone['id'],
+                    (string) $userId,
+                    $content,
+                    $replyToId !== '' ? $replyToId : null,
+                    $pdo
+                );
+                $savedAttachments = ZoneMessageAttachmentModel::createMany(
+                    (string) $row['id'],
+                    $attachments,
+                    $pdo
+                );
+                $pdo->commit();
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                throw $e;
+            }
+
             $message = self::presentMessage(
                 $row,
                 $replyRow,
-                (string) ($access['collab']['user_id'] ?? '')
+                (string) ($access['collab']['user_id'] ?? ''),
+                $savedAttachments
             );
 
             // Siaran live ke semua anggota circle (pengirim termasuk,
@@ -692,7 +735,7 @@ class CircleController
      * @param  array<string, mixed> $row Baris zone_messages + username + photo_profile_url
      * @return array<string, mixed>
      */
-    private static function presentMessage(array $row, ?array $replyRow = null, ?string $ownerId = null): array
+    private static function presentMessage(array $row, ?array $replyRow = null, ?string $ownerId = null, array $attachments = []): array
     {
         return [
             'id' => $row['id'],
@@ -713,6 +756,28 @@ class CircleController
             'mentionsEveryone' => $ownerId !== null
                 && (string) ($row['user_id'] ?? '') === $ownerId
                 && preg_match('/(?:^|\s)@everyone(?=$|[\s.,!?;:])/', (string) ($row['message'] ?? '')) === 1,
+            'attachments' => array_map(
+                static fn (array $a): array => self::presentAttachment($a),
+                $attachments
+            ),
+        ];
+    }
+
+    /**
+     * Bentuk satu lampiran pesan zone untuk frontend.
+     *
+     * @param  array<string, mixed> $row Baris zone_message_attachments
+     * @return array<string, mixed>
+     */
+    private static function presentAttachment(array $row): array
+    {
+        return [
+            'id' => $row['id'],
+            'url' => $row['url'],
+            'publicId' => $row['public_id'],
+            'fileName' => $row['file_name'],
+            'kind' => $row['kind'],
+            'sizeBytes' => (int) ($row['size_bytes'] ?? 0),
         ];
     }
 
