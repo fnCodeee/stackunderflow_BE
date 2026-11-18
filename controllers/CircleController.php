@@ -279,6 +279,8 @@ class CircleController
                 array_pop($rows);
             }
 
+            $ownerId = (string) ($access['collab']['user_id'] ?? '');
+
             // Lampirkan kutipan reply: ambil semua pesan asal yang
             // dirujuk halaman ini dalam satu query.
             $replyIds = [];
@@ -296,7 +298,8 @@ class CircleController
                     $r,
                     !empty($r['reply_to_id'])
                         ? ($replyMap[(string) $r['reply_to_id']] ?? null)
-                        : null
+                        : null,
+                    $ownerId
                 ),
                 array_reverse($rows)
             );
@@ -366,7 +369,11 @@ class CircleController
                 $content,
                 $replyToId !== '' ? $replyToId : null
             );
-            $message = self::presentMessage($row, $replyRow);
+            $message = self::presentMessage(
+                $row,
+                $replyRow,
+                (string) ($access['collab']['user_id'] ?? '')
+            );
 
             // Siaran live ke semua anggota circle (pengirim termasuk,
             // untuk tab/perangkat lain miliknya). Best-effort:
@@ -677,7 +684,7 @@ class CircleController
      * @param  array<string, mixed> $row Baris zone_messages + username + photo_profile_url
      * @return array<string, mixed>
      */
-    private static function presentMessage(array $row, ?array $replyRow = null): array
+    private static function presentMessage(array $row, ?array $replyRow = null, ?string $ownerId = null): array
     {
         return [
             'id' => $row['id'],
@@ -695,6 +702,9 @@ class CircleController
                 'authorAvatarUrl' => $replyRow['photo_profile_url'] ?? null,
                 'content' => $replyRow['message'],
             ] : null,
+            'mentionsEveryone' => $ownerId !== null
+                && (string) ($row['user_id'] ?? '') === $ownerId
+                && preg_match('/(?:^|\s)@everyone(?=$|[\s.,!?;:])/', (string) ($row['message'] ?? '')) === 1,
         ];
     }
 
