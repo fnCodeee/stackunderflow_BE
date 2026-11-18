@@ -1148,7 +1148,7 @@ assertTest("Post Existing (452a041a-c7cc-495b-ad5e-8a6c2af46522) Tetap Utuh dan 
 // ─────────────────────────────────────────────────────────────────────────────
 // 16. PHASE 4C: CREATE COLLABORATION & AUTO-CREATE CIRCLE (POST /api/collab)
 // ─────────────────────────────────────────────────────────────────────────────
-printHeader("16. [Phase 4C] Create Collaboration & Auto-create Circle (POST /api/collab)");
+printHeader("16. [Phase 4C] Create Collaboration & Circle Pilihan Owner (POST /api/collab)");
 
 require_once BASE_PATH . '/models/CollabModel.php';
 require_once BASE_PATH . '/models/CircleModel.php';
@@ -1202,8 +1202,9 @@ assertTest("CollabModel::create() Menggunakan PDO Transaction (beginTransaction,
 assertTest("CollabModel::create() Menyimpan ke Tabel collaborations", str_contains($collabModelSource, 'INSERT INTO collaborations'));
 assertTest("CollabModel::create() Menyimpan ke Tabel collab_media", str_contains($collabModelSource, 'INSERT INTO collab_media'));
 assertTest("CollabModel::create() Menyimpan ke Tabel collab_skills", str_contains($collabModelSource, 'INSERT INTO collab_skills'));
-assertTest("CollabModel::create() Memanggil CircleModel::create() untuk Auto-create Circle", str_contains($collabModelSource, 'CircleModel::create('));
-assertTest("CollabModel Tidak Menggunakan/Menyimpan communication_url", !str_contains($collabModelSource, 'communication_url'));
+assertTest("CollabModel::create() Memanggil CircleModel::create() untuk Circle Pilihan Owner", str_contains($collabModelSource, 'CircleModel::create('));
+assertTest("CollabModel::create() Membaca group_mode dari Form Pembuatan", str_contains($collabModelSource, 'group_mode'));
+assertTest("CollabModel Menyimpan communication_url untuk Mode Grup Eksternal", str_contains($collabModelSource, 'communication_url'));
 
 // 4. Controller Validation
 // 4a. Request tanpa Auth / JWT -> 401 Unauthorized
@@ -1257,7 +1258,7 @@ assertTest("Transaksi Rollback Menjamin Tidak Ada Collaboration atau Circle Pars
 $sampleUserId = $pdo->query("SELECT id FROM users LIMIT 1")->fetchColumn();
 $sampleSkillId = $pdo->query("SELECT id FROM skills LIMIT 1")->fetchColumn();
 
-// 5a. Request valid: Buat kolaborasi dan auto-create circle
+// 5a. Request valid: Buat kolaborasi tanpa pilihan grup (default group_mode 'none')
 $testCollabTitle = 'Project Fullstack Testing ' . bin2hex(random_bytes(4));
 $createdCollab = CollabModel::create([
     'user_id'          => $sampleUserId,
@@ -1275,18 +1276,50 @@ assertTest("Data Collaboration Tersimpan di Tabel collaborations", (int)$pdo->qu
 assertTest("Media Tersimpan di Tabel collab_media", (int)$pdo->query("SELECT COUNT(*) FROM collab_media WHERE collab_id = '{$collabTestId}'")->fetchColumn() === 1);
 assertTest("Skills Tersimpan di Tabel collab_skills", (int)$pdo->query("SELECT COUNT(*) FROM collab_skills WHERE collab_id = '{$collabTestId}'")->fetchColumn() === 1);
 
-// 5b. Verifikasi Auto-create Circle
-$createdCircle = CircleModel::findByCollaborationId($collabTestId);
-assertTest("Auto-create Circle: Tepat Satu Baris Terbuat di Tabel circle", $createdCircle !== null);
-assertTest("Data Circle Memiliki collaboration_id yang Benar", $createdCircle !== null && $createdCircle['collaboration_id'] === $collabTestId);
-assertTest("Data Circle Memiliki Title yang Sesuai dengan Collaboration", $createdCircle !== null && $createdCircle['title'] === $testCollabTitle);
+// 5b. Verifikasi Circle TIDAK dibuat tanpa pilihan owner (default 'none')
+$noCircle = CircleModel::findByCollaborationId($collabTestId);
+assertTest("Tanpa group_mode, Circle Tidak Dibuat Sama Sekali", $noCircle === null);
+
+// 5b-2. group_mode 'circle': Circle + dua zone bawaan dibuat
+$circleCollab = CollabModel::create([
+    'user_id'          => $sampleUserId,
+    'title'            => 'Project Circle Mode ' . bin2hex(random_bytes(4)),
+    'description'      => 'Deskripsi proyek pengujian mode circle',
+    'required_member'  => 2,
+    'skills_needed'    => [$sampleSkillId],
+    'group_mode'       => 'circle',
+]);
+$circleCollabId = $circleCollab['id'];
+$createdCircle = CircleModel::findByCollaborationId($circleCollabId);
+assertTest("group_mode 'circle': Tepat Satu Baris Terbuat di Tabel circle", $createdCircle !== null);
+assertTest("Data Circle Memiliki collaboration_id yang Benar", $createdCircle !== null && $createdCircle['collaboration_id'] === $circleCollabId);
+assertTest("Data Circle Memiliki Title yang Sesuai dengan Collaboration", $createdCircle !== null && $createdCircle['title'] === $circleCollab['title']);
 assertTest("Data Circle Memiliki photo_profile_url Nullable (Bukan URL Palsu)", $createdCircle !== null && ($createdCircle['photo_profile_url'] === null || is_string($createdCircle['photo_profile_url'])));
+$zoneRows = $createdCircle !== null ? $pdo->query("SELECT title, allow_public_message FROM zone WHERE circle_id = '{$createdCircle['id']}'")->fetchAll(PDO::FETCH_ASSOC) : [];
+assertTest("Circle Baru Memiliki Tepat Dua Zone Bawaan", count($zoneRows) === 2);
+$zoneByTitle = array_column($zoneRows, 'allow_public_message', 'title');
+assertTest("Zone announcements Hanya Owner yang Bisa Mengirim (allow_public_message = 0)", isset($zoneByTitle['announcements']) && (int)$zoneByTitle['announcements'] === 0);
+assertTest("Zone general Terbuka untuk Semua Anggota (allow_public_message = 1)", isset($zoneByTitle['general']) && (int)$zoneByTitle['general'] === 1);
+
+// 5b-3. group_mode 'external': link tersimpan, Circle tidak dibuat
+$externalCollab = CollabModel::create([
+    'user_id'          => $sampleUserId,
+    'title'            => 'Project External Mode ' . bin2hex(random_bytes(4)),
+    'description'      => 'Deskripsi proyek pengujian mode eksternal',
+    'required_member'  => 2,
+    'skills_needed'    => [$sampleSkillId],
+    'group_mode'       => 'external',
+    'communication_url' => 'https://chat.whatsapp.com/testgroup123',
+]);
+$externalCollabId = $externalCollab['id'];
+assertTest("group_mode 'external': communication_url Tersimpan di Payload", ($externalCollab['communication_url'] ?? null) === 'https://chat.whatsapp.com/testgroup123');
+assertTest("group_mode 'external': Circle Tidak Dibuat", CircleModel::findByCollaborationId($externalCollabId) === null);
 
 // 5c. Verifikasi Pencegahan Duplikasi Circle (Unique Constraint uq_circle_collaboration_id)
 $duplicateCircleBlocked = false;
 try {
     CircleModel::create([
-        'collaboration_id' => $collabTestId,
+        'collaboration_id' => $circleCollabId,
         'title'            => 'Duplicate Circle Attempt',
     ]);
 } catch (PDOException $e) {
@@ -1322,6 +1355,82 @@ CollabModel::deleteById($collabTestId);
 $collabCleaned = (int)$pdo->query("SELECT COUNT(*) FROM collaborations WHERE id = '{$collabTestId}'")->fetchColumn() === 0;
 $circleCleaned = (int)$pdo->query("SELECT COUNT(*) FROM circle WHERE collaboration_id = '{$collabTestId}'")->fetchColumn() === 0;
 assertTest("Cascade Cleanup: Collaboration dan Circle Terhapus Bersih", $collabCleaned && $circleCleaned);
+
+// 5f. Cleanup kolaborasi pengujian mode circle + eksternal (hard delete: cascade circle + zone)
+$pdo->query("DELETE FROM collaborations WHERE id IN ('{$circleCollabId}', '{$externalCollabId}')");
+$extraCleaned = (int)$pdo->query("SELECT COUNT(*) FROM collaborations WHERE id IN ('{$circleCollabId}', '{$externalCollabId}')")->fetchColumn() === 0;
+assertTest("Cleanup: Kolaborasi Mode Circle dan Eksternal Terhapus", $extraCleaned);
+
+// =============================================================================
+// 16B. CIRCLE PHASE 1: ENDPOINT CIRCLE & ZONE (keputusan 2026-11-18)
+// =============================================================================
+printHeader("16B. [Circle Phase 1] Endpoint Circle & Zone (POST /api/collab/:id/circle, GET /api/circles)");
+
+require_once BASE_PATH . '/models/CircleZoneModel.php';
+require_once BASE_PATH . '/controllers/CircleController.php';
+
+assertTest("Class CircleZoneModel Tersedia", class_exists('CircleZoneModel'));
+assertTest("Method CircleZoneModel::createDefaults() Tersedia", method_exists('CircleZoneModel', 'createDefaults'));
+assertTest("Method CircleModel::listForUser() Tersedia", method_exists('CircleModel', 'listForUser'));
+assertTest("Class CircleController Tersedia", class_exists('CircleController'));
+assertTest("Method CircleController::createForCollab() Tersedia", method_exists('CircleController', 'createForCollab'));
+assertTest("Method CircleController::listCircles() Tersedia", method_exists('CircleController', 'listCircles'));
+assertTest("Method CircleController::getCircle() Tersedia", method_exists('CircleController', 'getCircle'));
+
+$apiRoutesSource = (string)file_get_contents(BASE_PATH . '/routes/api.php');
+assertTest("Route POST /api/collab/:id/circle Terdaftar", str_contains($apiRoutesSource, "'/api/collab/:id/circle'"));
+assertTest("Route GET /api/circles Terdaftar", str_contains($apiRoutesSource, "'/api/circles'"));
+assertTest("Route GET /api/circles/:circleId Terdaftar", str_contains($apiRoutesSource, "'/api/circles/:circleId'"));
+assertTest("Route GET /api/circles/:circleId/zones Terdaftar", str_contains($apiRoutesSource, "'/api/circles/:circleId/zones'"));
+assertTest("Route GET /api/circles/:circleId/zones/:zoneId Terdaftar", str_contains($apiRoutesSource, "'/api/circles/:circleId/zones/:zoneId'"));
+
+// Kolaborasi + circle khusus pengujian controller (dibuat lewat model)
+$ctrlCollab = CollabModel::create([
+    'user_id'          => $sampleUserId,
+    'title'            => 'Project Circle Controller ' . bin2hex(random_bytes(4)),
+    'description'      => 'Pengujian CircleController Phase 1',
+    'required_member'  => 2,
+    'skills_needed'    => [$sampleSkillId],
+    'group_mode'       => 'circle',
+]);
+$ctrlCollabId = $ctrlCollab['id'];
+$ctrlCircle = CircleModel::findByCollaborationId($ctrlCollabId);
+$ctrlCircleId = $ctrlCircle['id'];
+$otherUserId = $pdo->query("SELECT id FROM users WHERE id != '{$sampleUserId}' LIMIT 1")->fetchColumn();
+
+// Non-owner membuat circle lewat endpoint -> 403
+$cmdCircleNonOwner = 'php -r \'define("BASE_PATH", "' . BASE_PATH . '"); require_once BASE_PATH . "/config/env.php"; require_once BASE_PATH . "/controllers/CircleController.php"; $GLOBALS["user"] = ["id" => "' . $otherUserId . '"]; $GLOBALS["body"] = []; CircleController::createForCollab(["id" => "' . $ctrlCollabId . '"]);\'';
+$resCircleNonOwner = json_decode((string)shell_exec($cmdCircleNonOwner), true);
+assertTest("POST /api/collab/:id/circle oleh Bukan Owner -> 403", isset($resCircleNonOwner['success']) && $resCircleNonOwner['success'] === false && ($resCircleNonOwner['message'] ?? '') === 'Only the project owner can create its Circle');
+
+// Owner membuat circle kedua -> 409
+$cmdCircleDup = 'php -r \'define("BASE_PATH", "' . BASE_PATH . '"); require_once BASE_PATH . "/config/env.php"; require_once BASE_PATH . "/controllers/CircleController.php"; $GLOBALS["user"] = ["id" => "' . $sampleUserId . '"]; $GLOBALS["body"] = []; CircleController::createForCollab(["id" => "' . $ctrlCollabId . '"]);\'';
+$resCircleDup = json_decode((string)shell_exec($cmdCircleDup), true);
+assertTest("POST /api/collab/:id/circle Kedua Kalinya -> 409", isset($resCircleDup['success']) && $resCircleDup['success'] === false && ($resCircleDup['message'] ?? '') === 'Circle already exists for this collaboration');
+
+// User luar membaca detail circle -> 403
+$cmdCircleOutsider = 'php -r \'define("BASE_PATH", "' . BASE_PATH . '"); require_once BASE_PATH . "/config/env.php"; require_once BASE_PATH . "/controllers/CircleController.php"; $GLOBALS["user"] = ["id" => "' . $otherUserId . '"]; CircleController::getCircle(["circleId" => "' . $ctrlCircleId . '"]);\'';
+$resCircleOutsider = json_decode((string)shell_exec($cmdCircleOutsider), true);
+assertTest("GET /api/circles/:circleId oleh Bukan Anggota -> 403", isset($resCircleOutsider['success']) && $resCircleOutsider['success'] === false);
+
+// Owner membaca detail circle -> zones + memberCanPost benar
+$cmdCircleOwner = 'php -r \'define("BASE_PATH", "' . BASE_PATH . '"); require_once BASE_PATH . "/config/env.php"; require_once BASE_PATH . "/controllers/CircleController.php"; $GLOBALS["user"] = ["id" => "' . $sampleUserId . '"]; CircleController::getCircle(["circleId" => "' . $ctrlCircleId . '"]);\'';
+$resCircleOwner = json_decode((string)shell_exec($cmdCircleOwner), true);
+$ownerZones = $resCircleOwner['data']['zones'] ?? [];
+$ownerZoneMap = array_column($ownerZones, 'memberCanPost', 'title');
+assertTest("GET /api/circles/:circleId oleh Owner -> Dua Zone", count($ownerZones) === 2);
+assertTest("Owner memberCanPost di announcements = true", ($ownerZoneMap['announcements'] ?? null) === true);
+assertTest("Owner memberCanPost di general = true", ($ownerZoneMap['general'] ?? null) === true);
+assertTest("Detail Circle Memuat Members dengan Owner Terdaftar", isset($resCircleOwner['data']['members']) && count($resCircleOwner['data']['members']) >= 1);
+
+// listForUser: owner melihat circle-nya, user luar tidak
+$ownerListIds = array_column(CircleModel::listForUser($sampleUserId), 'id');
+assertTest("CircleModel::listForUser Memuat Circle Milik Owner", in_array($ctrlCircleId, $ownerListIds, true));
+$outsiderListIds = array_column(CircleModel::listForUser((string)$otherUserId), 'id');
+assertTest("CircleModel::listForUser Tidak Memuat Circle untuk User Luar", !in_array($ctrlCircleId, $outsiderListIds, true));
+
+// Cleanup kolaborasi pengujian controller
+$pdo->query("DELETE FROM collaborations WHERE id = '{$ctrlCollabId}'");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 17. PHASE 4D: READ COLLABORATION (GET /api/collab, GET /api/collab/:id, GET /api/profiles/:userId/collab)

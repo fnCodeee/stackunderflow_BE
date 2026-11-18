@@ -23,7 +23,10 @@ class CollabController
 {
     /**
      * Handler untuk POST /api/collab
-     * Membuat postingan kolaborasi baru beserta media, skills, dan otomatis membuat satu circle.
+     * Membuat postingan kolaborasi baru beserta media dan skills.
+     * Circle hanya dibuat bila owner memilih group_mode 'circle'
+     * (keputusan 2026-11-18); mode 'external' menyimpan link grup
+     * eksternal di communication_url.
      *
      * @param  array<string, string> $params Path parameters dari Router
      * @return void
@@ -57,6 +60,8 @@ class CollabController
             $mediaUrls      = $body['media_urls'] ?? $body['mediaUrls'] ?? [];
             $mediaPublicIds = $body['media_public_ids'] ?? $body['mediaPublicIds'] ?? [];
             $skillsNeeded   = $body['skills_needed'] ?? $body['skillsNeeded'] ?? null;
+            $groupMode      = strtolower(trim((string)($body['group_mode'] ?? $body['groupMode'] ?? 'none')));
+            $communicationUrl = trim((string)($body['communication_url'] ?? $body['communicationUrl'] ?? ''));
 
             // 2. Validasi field wajib sesuai baseline Express (kecuali communicationUrl yang sudah deprecated)
             if (
@@ -74,6 +79,27 @@ class CollabController
             $requiredMemberInt = (int)$requiredMember;
             if ($requiredMemberInt < 1 || $requiredMemberInt > 10) {
                 Response::json(null, 400, 'requiredMember harus angka 1-10', false);
+            }
+
+            // 2b. Pilihan ruang grup owner (keputusan 2026-11-18):
+            // 'circle' membuat Circle bawaan aplikasi, 'external'
+            // menyimpan link grup chat eksternal (WhatsApp/Telegram/
+            // Discord/dll), 'none' berarti owner belum memutuskan.
+            if (!in_array($groupMode, ['circle', 'external', 'none'], true)) {
+                Response::json(null, 400, 'group_mode tidak valid', false);
+            }
+            if ($groupMode === 'external') {
+                if ($communicationUrl === '') {
+                    Response::json(null, 400, 'Link grup eksternal wajib diisi.', false);
+                }
+                $urlScheme = strtolower((string)(parse_url($communicationUrl, PHP_URL_SCHEME) ?? ''));
+                if (
+                    strlen($communicationUrl) > 255 ||
+                    filter_var($communicationUrl, FILTER_VALIDATE_URL) === false ||
+                    !in_array($urlScheme, ['http', 'https'], true)
+                ) {
+                    Response::json(null, 400, 'Format link grup eksternal tidak valid.', false);
+                }
             }
 
             // Validasi due_date: tidak boleh di masa lalu (bandingkan tanggal saja)
@@ -133,7 +159,7 @@ class CollabController
                 Response::json(null, 400, $skillValidationError, false);
             }
 
-            // 5. Simpan ke database melalui CollabModel dalam transaksi atomik (collab + media + skills + circle)
+            // 5. Simpan ke database melalui CollabModel dalam transaksi atomik (collab + media + skills, plus circle bila dipilih)
             $result = CollabModel::create([
                 'user_id'          => $userId,
                 'title'            => $title,
@@ -144,6 +170,8 @@ class CollabController
                 'media_urls'       => is_array($mediaUrls) ? array_values($mediaUrls) : [],
                 'media_public_ids' => is_array($mediaPublicIds) ? array_values($mediaPublicIds) : [],
                 'skills_needed'    => $uniqueSkillIds,
+                'group_mode'       => $groupMode,
+                'communication_url' => $groupMode === 'external' ? $communicationUrl : null,
             ]);
 
             // AI Moderator: antrekan kolaborasi baru untuk diperiksa.
@@ -274,6 +302,19 @@ class CollabController
                 if ($myApp !== null) {
                     $collab['my_application'] = ['status' => $myApp['status']];
                 }
+            }
+
+            // Link grup eksternal hanya boleh dilihat owner dan
+            // anggota yang sudah diterima. Pengunjung publik tidak
+            // menerima link-nya sama sekali (null), supaya grup
+            // tidak bisa dimasuki orang di luar tim.
+            $viewerId = $myUserId !== null ? (string) $myUserId : null;
+            $canSeeGroupLink = $viewerId !== null && (
+                ($collab['owner']['id'] ?? null) === $viewerId ||
+                CollabModel::isMember($collabId, $viewerId)
+            );
+            if (!$canSeeGroupLink) {
+                $collab['communication_url'] = null;
             }
 
             Response::json($collab, 200, 'Detail collaboration', true);

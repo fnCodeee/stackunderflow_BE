@@ -18,6 +18,7 @@ require_once BASE_PATH . '/controllers/AuthController.php';
 require_once BASE_PATH . '/controllers/ProfileController.php';
 require_once BASE_PATH . '/controllers/PostController.php';
 require_once BASE_PATH . '/controllers/CollabController.php';
+require_once BASE_PATH . '/controllers/CircleController.php';
 require_once BASE_PATH . '/controllers/SkillController.php';
 require_once BASE_PATH . '/controllers/SearchController.php';
 require_once BASE_PATH . '/controllers/UserController.php';
@@ -192,6 +193,16 @@ $router->delete('/api/collab/:id/apply', [AuthMiddleware::class, 'handle'], [Col
 $router->post('/api/collab/:id/complete', [AuthMiddleware::class, 'handle'], [CollabController::class, 'completeProject']);
 $router->post('/api/collab/:id/reopen', [AuthMiddleware::class, 'handle'], [CollabController::class, 'reopenProject']);
 $router->put('/api/collab/:id/members/:userId/status', [AuthMiddleware::class, 'handle'], [CollabController::class, 'setMemberWorkStatus']);
+
+// CIRCLE MODULE (Phase 1 fondasi, keputusan 2026-11-18): Circle dibuat
+// eksplisit oleh owner (di form collab atau lewat POST di bawah ini),
+// tidak lagi otomatis. Semua endpoint butuh JWT; akses dibatasi ke
+// owner + accepted member di CircleController.
+$router->post('/api/collab/:id/circle', [AuthMiddleware::class, 'handle'], [CircleController::class, 'createForCollab']);
+$router->get('/api/circles', [AuthMiddleware::class, 'handle'], [CircleController::class, 'listCircles']);
+$router->get('/api/circles/:circleId', [AuthMiddleware::class, 'handle'], [CircleController::class, 'getCircle']);
+$router->get('/api/circles/:circleId/zones', [AuthMiddleware::class, 'handle'], [CircleController::class, 'listZones']);
+$router->get('/api/circles/:circleId/zones/:zoneId', [AuthMiddleware::class, 'handle'], [CircleController::class, 'getZone']);
 
 // ── SKILLS MODULE ─────────────────────────────────────────────────────────────
 // GET /api/skills: skill system + private skill milik user yang sedang login

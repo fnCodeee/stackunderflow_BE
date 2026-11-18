@@ -6,7 +6,7 @@
  * COLLABORATION MODEL (Data Access Layer)
  *
  * Bertanggung jawab terhadap operasi database untuk tabel `collaborations`,
- * relasi `collab_media`, `collab_skills`, dan otomatisasi pembuatan `circle`.
+ * relasi `collab_media`, `collab_skills`, dan pembuatan `circle` bila owner memilihnya.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -20,8 +20,9 @@ require_once BASE_PATH . '/models/SkillModel.php';
 class CollabModel
 {
     /**
-     * Membuat kolaborasi baru beserta media, skills, dan auto-create circle
-     * dalam satu transaksi database PDO atomik.
+     * Membuat kolaborasi baru beserta media dan skills dalam satu
+     * transaksi database PDO atomik. Circle hanya dibuat bila owner
+     * memilih group_mode 'circle' (keputusan 2026-11-18).
      *
      * @param  array{
      *     user_id: string,
@@ -33,6 +34,8 @@ class CollabModel
      *     media_public_ids?: array<int, ?string>,
      *     skills_needed?: array<int, mixed>,
      *     circle_photo_profile_url?: ?string,
+     *     group_mode?: string,
+     *     communication_url?: ?string,
      *     id?: string
      * } $data
      * @return array<string, mixed> Data collaboration yang baru dibuat
@@ -62,6 +65,12 @@ class CollabModel
         $mediaPublicIds = $data['media_public_ids'] ?? [];
         $skillsNeeded = $data['skills_needed'] ?? [];
         $circlePhoto = $data['circle_photo_profile_url'] ?? null;
+        $groupMode = in_array($data['group_mode'] ?? 'none', ['circle', 'external', 'none'], true)
+            ? (string) $data['group_mode']
+            : 'none';
+        $communicationUrl = $groupMode === 'external'
+            ? ($data['communication_url'] ?? null)
+            : null;
 
         // Mulai transaksi atomik
         $pdo->beginTransaction();
@@ -69,8 +78,8 @@ class CollabModel
         try {
             // 1. Insert ke tabel collaborations
             $collabStmt = $pdo->prepare(
-                "INSERT INTO collaborations (id, user_id, title, description, type, due_date, required_member, status)
-                 VALUES (:id, :user_id, :title, :description, :type, :due_date, :required_member, :status)"
+                "INSERT INTO collaborations (id, user_id, title, description, type, due_date, required_member, status, communication_url)
+                 VALUES (:id, :user_id, :title, :description, :type, :due_date, :required_member, :status, :communication_url)"
             );
 
             $collabStmt->execute([
@@ -82,6 +91,7 @@ class CollabModel
                 ':due_date' => $dueDate,
                 ':required_member' => $requiredMember,
                 ':status' => $status,
+                ':communication_url' => $communicationUrl,
             ]);
 
             // 2. Insert media ke tabel collab_media jika ada
@@ -156,12 +166,18 @@ class CollabModel
                 }
             }
 
-            // 4. Auto-create Circle yang terhubung dengan collaboration ini
-            CircleModel::create([
-                'collaboration_id' => $id,
-                'title' => $title,
-                'photo_profile_url' => $circlePhoto,
-            ], $pdo);
+            // 4. Circle hanya dibuat bila owner memilihnya di form
+            //    pembuatan (group_mode 'circle'). Mode 'external'
+            //    memakai link grup di luar aplikasi; mode 'none'
+            //    berarti owner belum memutuskan dan Circle masih
+            //    bisa dibuat belakangan lewat POST /api/collab/:id/circle.
+            if ($groupMode === 'circle') {
+                CircleModel::create([
+                    'collaboration_id' => $id,
+                    'title' => $title,
+                    'photo_profile_url' => $circlePhoto,
+                ], $pdo);
+            }
 
             // 5. Owner adalah anggota pertama (accepted): collab baru
             //    mulai dengan accepted_member_count = 1.
@@ -195,6 +211,7 @@ class CollabModel
             'media_urls' => $mediaUrls,
             'media_public_ids' => $mediaPublicIds,
             'skills_needed' => $skillsNeeded,
+            'communication_url' => $communicationUrl,
         ];
     }
 
@@ -261,6 +278,7 @@ class CollabModel
             'media_urls' => $mediaUrls,
             'media_public_ids' => $mediaPublicIds,
             'skills_needed' => $skills,
+            'communication_url' => $collab['communication_url'] ?? null,
             'circle' => $circle,
             'created_at' => $collab['created_at'],
             'updated_at' => $collab['updated_at'],
@@ -516,6 +534,7 @@ class CollabModel
                 c.due_date,
                 c.required_member,
                 c.status,
+                c.communication_url,
                 c.created_at,
                 CASE
                     WHEN uc.status IS NOT NULL THEN uc.status
@@ -614,6 +633,19 @@ class CollabModel
             ];
         }
 
+        // Circle per collab (id saja; null bila owner belum
+        // membuatnya) — satu query batch seperti relasi lainnya.
+        $circleStmt = $pdo->prepare("
+            SELECT id, collaboration_id
+            FROM circle
+            WHERE collaboration_id IN ($placeholders)
+        ");
+        $circleStmt->execute($collabIds);
+        $circleMap = [];
+        foreach ($circleStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $circleMap[$row['collaboration_id']] = ['id' => $row['id']];
+        }
+
         // Media per collab (untuk grid foto di detail
         // My Collaborations) — satu query batch, urut waktu
         // upload. media_public_ids selalu sejajar indeks
@@ -651,6 +683,8 @@ class CollabModel
                 'media_urls' => $mediaMap[$cid]['urls'] ?? [],
                 'media_public_ids' => $mediaMap[$cid]['public_ids'] ?? [],
                 'members' => $membersMap[$cid] ?? [],
+                'circle' => $circleMap[$cid] ?? null,
+                'communication_url' => $collab['communication_url'] ?? null,
                 'owner' => [
                     'id' => $collab['user_id'],
                     'username' => $collab['username'] ?? '',
@@ -684,6 +718,7 @@ class CollabModel
                 c.due_date,
                 c.required_member,
                 c.status,
+                c.communication_url,
                 c.created_at,
                 CASE
                     WHEN uc.status IS NOT NULL THEN uc.status
@@ -735,6 +770,7 @@ class CollabModel
             c.due_date,
             c.required_member,
             c.status,
+            c.communication_url,
             c.created_at,
             c.updated_at,
             u.username,
@@ -828,6 +864,7 @@ class CollabModel
             'media_urls' => $mediaUrls,
             'media_public_ids' => $mediaPublicIds,
             'skills_needed' => $skills,
+            'communication_url' => $collab['communication_url'] ?? null,
             'members' => self::acceptedMembers($id, $pdo),
             'circle' => $circle,
             'owner' => [
