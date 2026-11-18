@@ -129,6 +129,7 @@ class CircleController
                     'id' => $row['id'],
                     'projectId' => $row['collaboration_id'],
                     'title' => $row['title'],
+                    'photoProfileUrl' => $row['photo_profile_url'] ?? null,
                     'status' => $row['status'],
                     'isOwner' => ($row['user_id'] ?? null) === (string) $userId,
                     'memberNames' => array_map(
