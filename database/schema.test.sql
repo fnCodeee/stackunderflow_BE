@@ -355,19 +355,24 @@ CREATE TABLE IF NOT EXISTS zone_messages (
     zone_id VARCHAR(36) NOT NULL,
     user_id VARCHAR(36) NOT NULL,
     message TEXT NOT NULL,
+    reply_to_id VARCHAR(36) NULL,
     timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (id),
     KEY idx_zone_messages_zone_id (zone_id),
     KEY idx_zone_messages_user_id (user_id),
     KEY idx_zone_messages_timestamp (timestamp),
+    KEY idx_zone_messages_reply_to_id (reply_to_id),
 
     CONSTRAINT fk_zone_messages_zone
         FOREIGN KEY (zone_id) REFERENCES zone(id)
         ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT fk_zone_messages_user
         FOREIGN KEY (user_id) REFERENCES users(id)
-        ON DELETE CASCADE ON UPDATE CASCADE
+        ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT fk_zone_messages_reply
+        FOREIGN KEY (reply_to_id) REFERENCES zone_messages(id)
+        ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =========================================================

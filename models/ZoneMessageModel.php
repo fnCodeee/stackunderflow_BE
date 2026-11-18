@@ -33,20 +33,21 @@ class ZoneMessageModel
      *
      * @return array<string, mixed>
      */
-    public static function create(string $zoneId, string $userId, string $content, ?PDO $pdo = null): array
+    public static function create(string $zoneId, string $userId, string $content, ?string $replyToId = null, ?PDO $pdo = null): array
     {
         $db = $pdo ?? getDB();
         $id = self::generateUuid();
 
         $stmt = $db->prepare(
-            "INSERT INTO zone_messages (id, zone_id, user_id, message)
-             VALUES (:id, :zone_id, :user_id, :message)"
+            "INSERT INTO zone_messages (id, zone_id, user_id, message, reply_to_id)
+             VALUES (:id, :zone_id, :user_id, :message, :reply_to_id)"
         );
         $stmt->execute([
             ':id' => $id,
             ':zone_id' => $zoneId,
             ':user_id' => $userId,
             ':message' => $content,
+            ':reply_to_id' => $replyToId,
         ]);
 
         $row = self::findById($id, $db);
@@ -79,6 +80,34 @@ class ZoneMessageModel
         return $row ?: null;
     }
 
+    /**
+     * Beberapa pesan sekaligus berdasarkan ID (untuk melampirkan
+     * kutipan reply ke daftar pesan), terindeks oleh ID pesan.
+     *
+     * @param  array<int, string> $ids
+     * @return array<string, array<string, mixed>>
+     */
+    public static function findManyByIds(array $ids, ?PDO $pdo = null): array
+    {
+        if ($ids === []) {
+            return [];
+        }
+        $db = $pdo ?? getDB();
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $stmt = $db->prepare(
+            "SELECT zm.*, u.username, pr.photo_profile_url
+             FROM zone_messages zm
+             JOIN users u ON u.id = zm.user_id
+             LEFT JOIN profiles pr ON pr.user_id = u.id
+             WHERE zm.id IN ($placeholders)"
+        );
+        $stmt->execute(array_values($ids));
+        $out = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $out[(string) $row['id']] = $row;
+        }
+        return $out;
+    }
     /**
      * Riwayat pesan satu zone, terbaru dulu.
      *

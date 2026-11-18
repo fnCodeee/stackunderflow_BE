@@ -279,8 +279,25 @@ class CircleController
                 array_pop($rows);
             }
 
+            // Lampirkan kutipan reply: ambil semua pesan asal yang
+            // dirujuk halaman ini dalam satu query.
+            $replyIds = [];
+            foreach ($rows as $r) {
+                if (!empty($r['reply_to_id'])) {
+                    $replyIds[(string) $r['reply_to_id']] = true;
+                }
+            }
+            $replyMap = $replyIds !== []
+                ? ZoneMessageModel::findManyByIds(array_keys($replyIds))
+                : [];
+
             $messages = array_map(
-                static fn (array $r): array => self::presentMessage($r),
+                static fn (array $r): array => self::presentMessage(
+                    $r,
+                    !empty($r['reply_to_id'])
+                        ? ($replyMap[(string) $r['reply_to_id']] ?? null)
+                        : null
+                ),
                 array_reverse($rows)
             );
 
@@ -331,8 +348,25 @@ class CircleController
                 Response::json(null, 400, 'Message is too long (max 2000 characters)', false);
             }
 
-            $row = ZoneMessageModel::create((string) $zone['id'], (string) $userId, $content);
-            $message = self::presentMessage($row);
+            // Reply opsional: target harus pesan yang ada di zone
+            // yang sama, supaya kutipan tidak bisa menunjuk ke
+            // circle/zone lain.
+            $replyToId = trim((string) ($body['replyToId'] ?? ''));
+            $replyRow = null;
+            if ($replyToId !== '') {
+                $replyRow = ZoneMessageModel::findById($replyToId);
+                if ($replyRow === null || (string) $replyRow['zone_id'] !== (string) $zone['id']) {
+                    Response::json(null, 400, 'Reply target is not a message in this zone', false);
+                }
+            }
+
+            $row = ZoneMessageModel::create(
+                (string) $zone['id'],
+                (string) $userId,
+                $content,
+                $replyToId !== '' ? $replyToId : null
+            );
+            $message = self::presentMessage($row, $replyRow);
 
             // Siaran live ke semua anggota circle (pengirim termasuk,
             // untuk tab/perangkat lain miliknya). Best-effort:
@@ -643,7 +677,7 @@ class CircleController
      * @param  array<string, mixed> $row Baris zone_messages + username + photo_profile_url
      * @return array<string, mixed>
      */
-    private static function presentMessage(array $row): array
+    private static function presentMessage(array $row, ?array $replyRow = null): array
     {
         return [
             'id' => $row['id'],
@@ -653,6 +687,14 @@ class CircleController
             'authorAvatarUrl' => $row['photo_profile_url'] ?? null,
             'content' => $row['message'],
             'createdAt' => $row['timestamp'],
+            'replyToId' => $row['reply_to_id'] ?? null,
+            'replyTo' => $replyRow !== null ? [
+                'id' => $replyRow['id'],
+                'authorId' => $replyRow['user_id'],
+                'authorName' => $replyRow['username'] ?? '',
+                'authorAvatarUrl' => $replyRow['photo_profile_url'] ?? null,
+                'content' => $replyRow['message'],
+            ] : null,
         ];
     }
 
