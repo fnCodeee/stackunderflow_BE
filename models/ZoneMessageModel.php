@@ -109,6 +109,48 @@ class ZoneMessageModel
         return $out;
     }
     /**
+     * Ubah isi pesan (fitur edit): edited_at ditandai dengan waktu
+     * server (NOW(), basis yang sama dengan kolom timestamp).
+     * Mengembalikan baris terbaru, atau null bila pesan tidak ada
+     * atau sudah terhapus.
+     *
+     * @return array<string, mixed>|null
+     */
+    public static function updateContent(string $id, string $content, ?PDO $pdo = null): ?array
+    {
+        $db = $pdo ?? getDB();
+        $stmt = $db->prepare(
+            "UPDATE zone_messages
+             SET message = :message, edited_at = NOW()
+             WHERE id = :id AND deleted_at IS NULL"
+        );
+        $stmt->execute([':message' => $content, ':id' => $id]);
+        if ($stmt->rowCount() === 0) {
+            return null;
+        }
+
+        return self::findById($id, $db);
+    }
+
+    /**
+     * Soft delete satu pesan: baris tetap ada (deleted_at terisi)
+     * tapi tidak pernah ditampilkan lagi. False bila pesan tidak
+     * ada atau sudah terhapus sebelumnya.
+     */
+    public static function softDelete(string $id, ?PDO $pdo = null): bool
+    {
+        $db = $pdo ?? getDB();
+        $stmt = $db->prepare(
+            "UPDATE zone_messages
+             SET deleted_at = NOW()
+             WHERE id = :id AND deleted_at IS NULL"
+        );
+        $stmt->execute([':id' => $id]);
+
+        return $stmt->rowCount() > 0;
+    }
+
+    /**
      * Riwayat pesan satu zone, terbaru dulu.
      *
      * $before adalah kursor pesan tertua yang sudah dimiliki klien
@@ -126,7 +168,7 @@ class ZoneMessageModel
                 FROM zone_messages zm
                 JOIN users u ON u.id = zm.user_id
                 LEFT JOIN profiles pr ON pr.user_id = u.id
-                WHERE zm.zone_id = :zone_id";
+                WHERE zm.zone_id = :zone_id AND zm.deleted_at IS NULL";
         $bind = [':zone_id' => $zoneId];
 
         if ($before !== null) {

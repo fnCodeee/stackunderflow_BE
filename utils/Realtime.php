@@ -180,4 +180,42 @@ class Realtime
             'payload' => ['circleId' => $circleId, 'zoneId' => $zoneId, 'message' => $message],
         ]);
     }
+
+    /**
+     * Beritahu satu anggota bahwa sebuah pesan zone diubah
+     * (edit teks) — salinan di layarnya diganti live.
+     *
+     * @param  string $userId   UUID anggota penerima
+     * @param  string $circleId UUID circle pemilik zone
+     * @param  string $zoneId   UUID zone tempat pesan berada
+     * @param  array<string, mixed> $message Pesan bentuk API terbaru
+     * @return void
+     */
+    public static function publishZoneMessageUpdated(string $userId, string $circleId, string $zoneId, array $message): void
+    {
+        self::publish([
+            'type' => 'zone-message-updated',
+            'userId' => $userId,
+            'payload' => ['circleId' => $circleId, 'zoneId' => $zoneId, 'message' => $message],
+        ]);
+    }
+
+    /**
+     * Beritahu satu anggota bahwa sebuah pesan zone dihapus —
+     * pesannya hilang dari layarnya live.
+     *
+     * @param  string $userId    UUID anggota penerima
+     * @param  string $circleId  UUID circle pemilik zone
+     * @param  string $zoneId    UUID zone tempat pesan berada
+     * @param  string $messageId UUID pesan yang dihapus
+     * @return void
+     */
+    public static function publishZoneMessageDeleted(string $userId, string $circleId, string $zoneId, string $messageId): void
+    {
+        self::publish([
+            'type' => 'zone-message-deleted',
+            'userId' => $userId,
+            'payload' => ['circleId' => $circleId, 'zoneId' => $zoneId, 'messageId' => $messageId],
+        ]);
+    }
 }

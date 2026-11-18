@@ -212,6 +212,8 @@ $router->put('/api/circles/:circleId', [AuthMiddleware::class, 'handle'], [Circl
 $router->delete('/api/circles/:circleId', [AuthMiddleware::class, 'handle'], [CircleController::class, 'deleteCircle']);
 $router->get('/api/circles/:circleId/zones/:zoneId/messages', [AuthMiddleware::class, 'handle'], [CircleController::class, 'listMessages']);
 $router->post('/api/circles/:circleId/zones/:zoneId/messages', [AuthMiddleware::class, 'handle'], [CircleController::class, 'sendMessage']);
+$router->put('/api/circles/:circleId/zones/:zoneId/messages/:messageId', [AuthMiddleware::class, 'handle'], [CircleController::class, 'editMessage']);
+$router->delete('/api/circles/:circleId/zones/:zoneId/messages/:messageId', [AuthMiddleware::class, 'handle'], [CircleController::class, 'deleteMessage']);
 $router->post('/api/circles/:circleId/zones/:zoneId/read', [AuthMiddleware::class, 'handle'], [CircleController::class, 'markZoneRead']);
 
 // ── SKILLS MODULE ─────────────────────────────────────────────────────────────

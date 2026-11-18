@@ -314,14 +314,23 @@ class CircleController
             );
 
             $messages = array_map(
-                static fn (array $r): array => self::presentMessage(
-                    $r,
-                    !empty($r['reply_to_id'])
+                static function (array $r) use ($replyMap, $ownerId, $attachmentMap): array {
+                    $replyRow = !empty($r['reply_to_id'])
                         ? ($replyMap[(string) $r['reply_to_id']] ?? null)
-                        : null,
-                    $ownerId,
-                    $attachmentMap[(string) $r['id']] ?? []
-                ),
+                        : null;
+                    // Pesan asal yang sudah dihapus tampil sebagai
+                    // "tidak tersedia" di frontend (replyTo null,
+                    // replyToId tetap terisi).
+                    if ($replyRow !== null && ($replyRow['deleted_at'] ?? null) !== null) {
+                        $replyRow = null;
+                    }
+                    return self::presentMessage(
+                        $r,
+                        $replyRow,
+                        $ownerId,
+                        $attachmentMap[(string) $r['id']] ?? []
+                    );
+                },
                 array_reverse($rows)
             );
 
@@ -377,6 +386,9 @@ class CircleController
             if ($replyToId !== '') {
                 $replyRow = ZoneMessageModel::findById($replyToId);
                 if ($replyRow === null || (string) $replyRow['zone_id'] !== (string) $zone['id']) {
+                    Response::json(null, 400, 'Reply target is not a message in this zone', false);
+                }
+                if (($replyRow['deleted_at'] ?? null) !== null) {
                     Response::json(null, 400, 'Reply target is not a message in this zone', false);
                 }
             }
@@ -442,6 +454,142 @@ class CircleController
         } catch (Throwable $e) {
             error_log('[CIRCLE ERROR] ' . $e->getMessage());
             Response::json(null, 500, 'Terjadi kesalahan pada server saat mengirim pesan', false);
+        }
+    }
+
+    /**
+     * Ambil pesan target untuk edit/delete: harus ada, milik zone
+     * ini, dan belum terhapus. Mengirim 404 dan berhenti bila tidak.
+     *
+     * @param  array<string, mixed> $zone
+     * @return array<string, mixed>
+     */
+    private static function resolveMessage(array $zone, string $messageId): array
+    {
+        $row = $messageId !== '' ? ZoneMessageModel::findById($messageId) : null;
+        if ($row === null
+            || (string) $row['zone_id'] !== (string) $zone['id']
+            || ($row['deleted_at'] ?? null) !== null
+        ) {
+            Response::json(null, 404, 'Message not found', false);
+        }
+
+        return $row;
+    }
+
+    /**
+     * PUT /api/circles/:circleId/zones/:zoneId/messages/:messageId
+     * Edit teks pesan zone. Hanya penulisnya. Lampiran tidak
+     * berubah; teks boleh dikosongkan hanya bila pesan punya
+     * lampiran (aturan yang sama seperti kirim). Hasil edit
+     * disiarkan live ke semua anggota.
+     *
+     * @param  array<string, string> $params
+     */
+    public static function editMessage(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $access = self::resolveAccess((string) ($params['circleId'] ?? ''), (string) $userId);
+            $zone = self::resolveZone($access, (string) ($params['zoneId'] ?? ''));
+            $row = self::resolveMessage($zone, (string) ($params['messageId'] ?? ''));
+
+            if ((string) $row['user_id'] !== (string) $userId) {
+                Response::json(null, 403, 'You can only edit your own messages', false);
+            }
+
+            $body = $GLOBALS['body'] ?? [];
+            $content = trim((string) ($body['content'] ?? ''));
+            if (mb_strlen($content) > 2000) {
+                Response::json(null, 400, 'Message is too long (max 2000 characters)', false);
+            }
+            if ($content === '') {
+                $existing = ZoneMessageAttachmentModel::forMessages([(string) $row['id']]);
+                if (($existing[(string) $row['id']] ?? []) === []) {
+                    Response::json(null, 400, 'Message cannot be empty', false);
+                }
+            }
+
+            $updated = ZoneMessageModel::updateContent((string) $row['id'], $content);
+            if ($updated === null) {
+                Response::json(null, 404, 'Message not found', false);
+            }
+
+            $replyRow = null;
+            if (!empty($updated['reply_to_id'])) {
+                $candidate = ZoneMessageModel::findById((string) $updated['reply_to_id']);
+                if ($candidate !== null && ($candidate['deleted_at'] ?? null) === null) {
+                    $replyRow = $candidate;
+                }
+            }
+            $attachmentMap = ZoneMessageAttachmentModel::forMessages([(string) $row['id']]);
+            $message = self::presentMessage(
+                $updated,
+                $replyRow,
+                (string) ($access['collab']['user_id'] ?? ''),
+                $attachmentMap[(string) $row['id']] ?? []
+            );
+
+            foreach (CollabModel::acceptedMembers((string) $access['circle']['collaboration_id']) as $member) {
+                Realtime::publishZoneMessageUpdated(
+                    (string) $member['id'],
+                    (string) $access['circle']['id'],
+                    (string) $zone['id'],
+                    $message
+                );
+            }
+
+            Response::json($message, 200, 'Message updated successfully', true);
+        } catch (Throwable $e) {
+            error_log('[CIRCLE ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat mengubah pesan', false);
+        }
+    }
+
+    /**
+     * DELETE /api/circles/:circleId/zones/:zoneId/messages/:messageId
+     * Hapus pesan zone (soft delete). Penulis boleh menghapus
+     * pesannya sendiri; owner circle boleh menghapus pesan siapa
+     * pun (moderasi). Penghapusan disiarkan live ke semua anggota.
+     *
+     * @param  array<string, string> $params
+     */
+    public static function deleteMessage(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $access = self::resolveAccess((string) ($params['circleId'] ?? ''), (string) $userId);
+            $zone = self::resolveZone($access, (string) ($params['zoneId'] ?? ''));
+            $row = self::resolveMessage($zone, (string) ($params['messageId'] ?? ''));
+
+            $isAuthor = (string) $row['user_id'] === (string) $userId;
+            if (!$isAuthor && !$access['isOwner']) {
+                Response::json(null, 403, 'You can only delete your own messages', false);
+            }
+
+            ZoneMessageModel::softDelete((string) $row['id']);
+
+            foreach (CollabModel::acceptedMembers((string) $access['circle']['collaboration_id']) as $member) {
+                Realtime::publishZoneMessageDeleted(
+                    (string) $member['id'],
+                    (string) $access['circle']['id'],
+                    (string) $zone['id'],
+                    (string) $row['id']
+                );
+            }
+
+            Response::json(null, 200, 'Message deleted successfully', true);
+        } catch (Throwable $e) {
+            error_log('[CIRCLE ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat menghapus pesan', false);
         }
     }
 
@@ -745,6 +893,7 @@ class CircleController
             'authorAvatarUrl' => $row['photo_profile_url'] ?? null,
             'content' => $row['message'],
             'createdAt' => $row['timestamp'],
+            'editedAt' => $row['edited_at'] ?? null,
             'replyToId' => $row['reply_to_id'] ?? null,
             'replyTo' => $replyRow !== null ? [
                 'id' => $replyRow['id'],

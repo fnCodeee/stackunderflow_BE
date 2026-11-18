@@ -35,7 +35,7 @@ class ZoneReadModel
              LEFT JOIN zone_reads zr
                ON zr.zone_id = zm.zone_id AND zr.user_id = :reader
              WHERE zm.zone_id IN (' . implode(',', $placeholders) . ')
-               AND zm.user_id <> :author
+               AND zm.user_id <> :author AND zm.deleted_at IS NULL
                AND (zr.last_read_at IS NULL OR zm.timestamp > zr.last_read_at)
              GROUP BY zm.zone_id'
         );
@@ -73,7 +73,7 @@ class ZoneReadModel
              LEFT JOIN zone_reads zr
                ON zr.zone_id = zm.zone_id AND zr.user_id = :reader
              WHERE z.circle_id IN (' . implode(',', $placeholders) . ')
-               AND zm.user_id <> :author
+               AND zm.user_id <> :author AND zm.deleted_at IS NULL
                AND (zr.last_read_at IS NULL OR zm.timestamp > zr.last_read_at)
              GROUP BY z.circle_id'
         );
@@ -199,7 +199,7 @@ class ZoneReadModel
              LEFT JOIN zone_reads zr
                ON zr.zone_id = zm.zone_id AND zr.user_id = :reader
              WHERE zm.zone_id IN (' . implode(',', $placeholders) . ')
-               AND zm.user_id <> :author
+               AND zm.user_id <> :author AND zm.deleted_at IS NULL
                AND (zr.last_read_at IS NULL OR zm.timestamp > zr.last_read_at)
              ORDER BY zm.timestamp ASC'
         );
@@ -250,7 +250,7 @@ class ZoneReadModel
              LEFT JOIN zone_reads zr
                ON zr.zone_id = zm.zone_id AND zr.user_id = :reader
              WHERE z.circle_id IN (' . implode(',', $placeholders) . ')
-               AND zm.user_id <> :author
+               AND zm.user_id <> :author AND zm.deleted_at IS NULL
                AND (zr.last_read_at IS NULL OR zm.timestamp > zr.last_read_at)'
         );
         $stmt->execute($params);
