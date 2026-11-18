@@ -72,6 +72,9 @@ class ProfileController
             if (array_key_exists('photo_profile_public_id', $body) && !is_string($body['photo_profile_public_id']) && !is_null($body['photo_profile_public_id'])) {
                 Response::json(null, 400, 'photo_profile_public_id harus berupa string', false);
             }
+            if (array_key_exists('theme_mode', $body) && !is_null($body['theme_mode']) && !in_array($body['theme_mode'], ['light', 'system', 'dark'], true)) {
+                Response::json(null, 400, 'theme_mode harus salah satu dari light, system, dark', false);
+            }
 
             // 4. Validasi social_media (jika field dikirimkan)
             if (array_key_exists('social_media', $body)) {
@@ -150,6 +153,9 @@ class ProfileController
             if (array_key_exists('photo_profile_public_id', $body)) {
                 $updateData['photo_profile_public_id'] = $body['photo_profile_public_id'] !== null ? (string) $body['photo_profile_public_id'] : null;
             }
+            if (array_key_exists('theme_mode', $body)) {
+                $updateData['theme_mode'] = $body['theme_mode'] !== null ? (string) $body['theme_mode'] : null;
+            }
 
             // 7. Eksekusi update profile, social media, dan skills dalam satu PDO Transaction
             $pdo = getDB();
@@ -189,6 +195,7 @@ class ProfileController
                 'bio'                     => $updatedProfile['bio'] ?? '',
                 'photo_profile_url'       => $updatedProfile['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
                 'photo_profile_public_id' => $updatedProfile['photo_profile_public_id'] ?? '',
+                'theme_mode'                => $updatedProfile['theme_mode'] ?? null,
                 'social_media'            => $socialMedia,
                 'skills'                  => $skills,
                 'created_at'              => $updatedProfile['created_at'] ?? null,

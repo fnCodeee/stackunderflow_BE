@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS profiles (
     bio VARCHAR(150) NULL,
     photo_profile_url VARCHAR(150) NULL,
     photo_profile_public_id VARCHAR(100) NULL,
+    theme_mode VARCHAR(10) NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (id),
