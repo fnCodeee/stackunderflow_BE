@@ -131,6 +131,13 @@ class CircleController
                 ),
                 (string) $userId
             );
+            $mentionTotals = ZoneReadModel::mentionCountsForCircles(
+                array_map(
+                    static fn (array $r): string => (string) $r['id'],
+                    $circleRows
+                ),
+                (string) $userId
+            );
 
             $result = [];
             foreach ($circleRows as $row) {
@@ -141,6 +148,7 @@ class CircleController
                     'title' => $row['title'],
                     'photoProfileUrl' => $row['photo_profile_url'] ?? null,
                     'unreadCount' => $unreadTotals[(string) $row['id']] ?? 0,
+                    'mentionCount' => $mentionTotals[(string) $row['id']] ?? 0,
                     'status' => $row['status'],
                     'isOwner' => ($row['user_id'] ?? null) === (string) $userId,
                     'memberNames' => array_map(
@@ -732,13 +740,18 @@ class CircleController
         $lastReadMap = $readerId !== ''
             ? ZoneReadModel::lastReadForZones($zoneIds, $readerId)
             : [];
+        $mentionMap = $readerId !== ''
+            ? ZoneReadModel::mentionStatsForZones($zoneIds, $readerId, $ownerId)
+            : [];
 
         $zones = array_map(
             static fn (array $z): array => self::presentZone(
                 $z,
                 $isOwner,
                 $unreadMap[(string) $z['id']] ?? 0,
-                $lastReadMap[(string) $z['id']] ?? null
+                $lastReadMap[(string) $z['id']] ?? null,
+                $mentionMap[(string) $z['id']]['count'] ?? 0,
+                $mentionMap[(string) $z['id']]['firstId'] ?? null
             ),
             $zoneRows
         );
@@ -802,7 +815,7 @@ class CircleController
      * @param  array<string, mixed> $zone
      * @return array<string, mixed>
      */
-    private static function presentZone(array $zone, bool $isOwner, int $unreadCount = 0, ?string $lastRead = null): array
+    private static function presentZone(array $zone, bool $isOwner, int $unreadCount = 0, ?string $lastRead = null, int $mentionCount = 0, ?string $firstMentionId = null): array
     {
         $publicCanPost = (int) ($zone['allow_public_message'] ?? 0) === 1;
 
@@ -813,6 +826,8 @@ class CircleController
             'allowPublicMessage' => $publicCanPost,
             'unreadCount' => $unreadCount,
             'lastRead' => $lastRead,
+            'mentionCount' => $mentionCount,
+            'firstMentionId' => $firstMentionId,
         ];
     }
 }
