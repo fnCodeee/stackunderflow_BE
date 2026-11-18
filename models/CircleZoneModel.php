@@ -87,6 +87,87 @@ class CircleZoneModel
     }
 
     /**
+     * Membuat satu zone baru di circle (di luar dua zone bawaan).
+     * Mengembalikan baris zone yang baru dibuat.
+     *
+     * @return array<string, mixed>
+     */
+    public static function createZone(string $circleId, string $title, bool $allowPublicMessage, ?PDO $pdo = null): array
+    {
+        $db = $pdo ?? getDB();
+        $id = self::generateUuid();
+        $stmt = $db->prepare(
+            "INSERT INTO zone (id, circle_id, title, allow_public_message)
+             VALUES (:id, :circle_id, :title, :allow_public_message)"
+        );
+        $stmt->execute([
+            ':id' => $id,
+            ':circle_id' => $circleId,
+            ':title' => $title,
+            ':allow_public_message' => $allowPublicMessage ? 1 : 0,
+        ]);
+        $created = self::findById($id, $db);
+        return $created ?? [
+            'id' => $id,
+            'circle_id' => $circleId,
+            'title' => $title,
+            'allow_public_message' => $allowPublicMessage ? 1 : 0,
+        ];
+    }
+
+    /**
+     * Memperbarui zone secara fleksibel (title / allow_public_message).
+     *
+     * @param  array<string, mixed> $data
+     */
+    public static function updateZone(string $id, array $data, ?PDO $pdo = null): bool
+    {
+        $db = $pdo ?? getDB();
+        $fields = [];
+        $params = [':id' => $id];
+
+        if (array_key_exists('title', $data)) {
+            $fields[] = "title = :title";
+            $params[':title'] = $data['title'];
+        }
+        if (array_key_exists('allow_public_message', $data)) {
+            $fields[] = "allow_public_message = :allow_public_message";
+            $params[':allow_public_message'] = $data['allow_public_message'];
+        }
+        if (empty($fields)) {
+            return true;
+        }
+
+        $stmt = $db->prepare("UPDATE zone SET " . implode(', ', $fields) . " WHERE id = :id");
+        return $stmt->execute($params);
+    }
+
+    /** Jumlah zone di satu circle (penjaga zone terakhir). */
+    public static function countByCircleId(string $circleId, ?PDO $pdo = null): int
+    {
+        $db = $pdo ?? getDB();
+        $stmt = $db->prepare("SELECT COUNT(*) FROM zone WHERE circle_id = :circle_id");
+        $stmt->execute([':circle_id' => $circleId]);
+        return (int) $stmt->fetchColumn();
+    }
+
+    /** Menghapus satu zone berdasarkan ID. */
+    public static function deleteById(string $id, ?PDO $pdo = null): bool
+    {
+        $db = $pdo ?? getDB();
+        $stmt = $db->prepare("DELETE FROM zone WHERE id = :id");
+        return $stmt->execute([':id' => $id]);
+    }
+
+    /** Menghapus semua zone di satu circle. */
+    public static function deleteByCircleId(string $circleId, ?PDO $pdo = null): bool
+    {
+        $db = $pdo ?? getDB();
+        $stmt = $db->prepare("DELETE FROM zone WHERE circle_id = :circle_id");
+        return $stmt->execute([':circle_id' => $circleId]);
+    }
+
+    /**
      * Helper: Generate UUID v4 standar (RFC 4122).
      */
     public static function generateUuid(): string

@@ -342,6 +342,246 @@ class CircleController
     }
 
     /**
+     * POST /api/circles/:circleId/zones
+     * Owner menambah zone baru. Body: { title, allowPublicMessage? }.
+     * allowPublicMessage default true (semua anggota boleh posting);
+     * false membuat zone hanya bisa diisi owner (pola announcements).
+     *
+     * @param  array<string, string> $params
+     */
+    public static function createZone(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $access = self::resolveAccess((string) ($params['circleId'] ?? ''), (string) $userId);
+            if (!$access['isOwner']) {
+                Response::json(null, 403, 'Only the project owner can add zones', false);
+            }
+
+            $body = $GLOBALS['body'] ?? [];
+            $title = trim((string) ($body['title'] ?? ''));
+            if ($title === '') {
+                Response::json(null, 400, 'Zone title is required', false);
+            }
+            if (mb_strlen($title) > 100) {
+                Response::json(null, 400, 'Zone title is too long (max 100 characters)', false);
+            }
+            $allowPublic = array_key_exists('allowPublicMessage', $body)
+                ? (bool) $body['allowPublicMessage']
+                : true;
+
+            $zone = CircleZoneModel::createZone(
+                (string) $access['circle']['id'],
+                $title,
+                $allowPublic
+            );
+
+            Response::json(self::presentZone($zone, true), 201, 'Zone created successfully', true);
+        } catch (Throwable $e) {
+            error_log('[CIRCLE ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat membuat zone', false);
+        }
+    }
+
+    /**
+     * PUT /api/circles/:circleId/zones/:zoneId
+     * Owner mengubah zone. Body: { title?, allowPublicMessage? }.
+     *
+     * @param  array<string, string> $params
+     */
+    public static function updateZone(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $access = self::resolveAccess((string) ($params['circleId'] ?? ''), (string) $userId);
+            if (!$access['isOwner']) {
+                Response::json(null, 403, 'Only the project owner can edit zones', false);
+            }
+            $zone = self::resolveZone($access, (string) ($params['zoneId'] ?? ''));
+
+            $body = $GLOBALS['body'] ?? [];
+            $data = [];
+            if (array_key_exists('title', $body)) {
+                $title = trim((string) $body['title']);
+                if ($title === '') {
+                    Response::json(null, 400, 'Zone title is required', false);
+                }
+                if (mb_strlen($title) > 100) {
+                    Response::json(null, 400, 'Zone title is too long (max 100 characters)', false);
+                }
+                $data['title'] = $title;
+            }
+            if (array_key_exists('allowPublicMessage', $body)) {
+                $data['allow_public_message'] = $body['allowPublicMessage'] ? 1 : 0;
+            }
+            if ($data !== []) {
+                CircleZoneModel::updateZone((string) $zone['id'], $data);
+            }
+
+            $fresh = CircleZoneModel::findById((string) $zone['id']) ?? $zone;
+            Response::json(self::presentZone($fresh, true), 200, 'Zone updated successfully', true);
+        } catch (Throwable $e) {
+            error_log('[CIRCLE ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat mengubah zone', false);
+        }
+    }
+
+    /**
+     * DELETE /api/circles/:circleId/zones/:zoneId
+     * Owner menghapus zone beserta semua pesannya. Zone terakhir di
+     * circle tidak boleh dihapus (circle harus punya minimal 1 zone).
+     *
+     * @param  array<string, string> $params
+     */
+    public static function deleteZone(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $access = self::resolveAccess((string) ($params['circleId'] ?? ''), (string) $userId);
+            if (!$access['isOwner']) {
+                Response::json(null, 403, 'Only the project owner can delete zones', false);
+            }
+            $zone = self::resolveZone($access, (string) ($params['zoneId'] ?? ''));
+
+            if (CircleZoneModel::countByCircleId((string) $access['circle']['id']) <= 1) {
+                Response::json(null, 400, 'A circle must keep at least one zone', false);
+            }
+
+            $pdo = getDB();
+            $pdo->beginTransaction();
+            try {
+                ZoneMessageModel::deleteByZoneId((string) $zone['id'], $pdo);
+                CircleZoneModel::deleteById((string) $zone['id'], $pdo);
+                $pdo->commit();
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                throw $e;
+            }
+
+            Response::json(null, 200, 'Zone deleted successfully', true);
+        } catch (Throwable $e) {
+            error_log('[CIRCLE ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat menghapus zone', false);
+        }
+    }
+
+    /**
+     * PUT /api/circles/:circleId
+     * Owner mengubah circle. Body: { title?, photoUrl? }.
+     * photoUrl null mengosongkan foto; string harus URL https.
+     * Mengembalikan detail circle terbaru.
+     *
+     * @param  array<string, string> $params
+     */
+    public static function updateCircle(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $access = self::resolveAccess((string) ($params['circleId'] ?? ''), (string) $userId);
+            if (!$access['isOwner']) {
+                Response::json(null, 403, 'Only the project owner can edit this circle', false);
+            }
+
+            $body = $GLOBALS['body'] ?? [];
+            $data = [];
+            if (array_key_exists('title', $body)) {
+                $title = trim((string) $body['title']);
+                if ($title === '') {
+                    Response::json(null, 400, 'Circle title is required', false);
+                }
+                if (mb_strlen($title) > 255) {
+                    Response::json(null, 400, 'Circle title is too long', false);
+                }
+                $data['title'] = $title;
+            }
+            if (array_key_exists('photoUrl', $body)) {
+                $photoUrl = $body['photoUrl'];
+                if ($photoUrl !== null) {
+                    $photoUrl = trim((string) $photoUrl);
+                    if ($photoUrl === '' || !str_starts_with($photoUrl, 'https://')) {
+                        Response::json(null, 400, 'Invalid photo URL', false);
+                    }
+                }
+                $data['photo_profile_url'] = $photoUrl;
+            }
+            if ($data !== []) {
+                CircleModel::updateById((string) $access['circle']['id'], $data);
+            }
+
+            $fresh = CircleModel::findById((string) $access['circle']['id']) ?? $access['circle'];
+            Response::json(
+                self::detailPayload($fresh, $access['collab'], true),
+                200,
+                'Circle updated successfully',
+                true
+            );
+        } catch (Throwable $e) {
+            error_log('[CIRCLE ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat mengubah circle', false);
+        }
+    }
+
+    /**
+     * DELETE /api/circles/:circleId
+     * Owner menghapus circle: semua pesan, zone, lalu circle-nya.
+     * Collaboration-nya sendiri tidak ikut terhapus; owner kembali
+     * bisa memilih ruang grup lain dari detail collaboration.
+     *
+     * @param  array<string, string> $params
+     */
+    public static function deleteCircle(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $access = self::resolveAccess((string) ($params['circleId'] ?? ''), (string) $userId);
+            if (!$access['isOwner']) {
+                Response::json(null, 403, 'Only the project owner can delete this circle', false);
+            }
+
+            $pdo = getDB();
+            $pdo->beginTransaction();
+            try {
+                ZoneMessageModel::deleteByCircleId((string) $access['circle']['id'], $pdo);
+                CircleZoneModel::deleteByCircleId((string) $access['circle']['id'], $pdo);
+                CircleModel::deleteById((string) $access['circle']['id'], $pdo);
+                $pdo->commit();
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                throw $e;
+            }
+
+            Response::json(null, 200, 'Circle deleted successfully', true);
+        } catch (Throwable $e) {
+            error_log('[CIRCLE ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat menghapus circle', false);
+        }
+    }
+
+    /**
      * Mengambil circle + collaboration dan memastikan user berhak
      * mengaksesnya (owner atau accepted member). Mengirim response
      * error (404/403) dan menghentikan eksekusi bila tidak berhak.
@@ -458,6 +698,7 @@ class CircleController
             'id' => $zone['id'],
             'title' => $zone['title'],
             'memberCanPost' => $publicCanPost || $isOwner,
+            'allowPublicMessage' => $publicCanPost,
             // Diisi endpoint messaging pada Phase 2 (id pesan terakhir
             // yang dibaca user); Phase 1 belum ada pesan sama sekali.
             'lastRead' => null,

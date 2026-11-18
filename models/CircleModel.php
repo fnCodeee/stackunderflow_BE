@@ -168,6 +168,42 @@ class CircleModel
     }
 
     /**
+     * Memperbarui data circle secara fleksibel berdasarkan id circle
+     * (title / photo_profile_url). Dipakai endpoint settings circle.
+     *
+     * @param  array<string, mixed> $data
+     */
+    public static function updateById(string $id, array $data, ?PDO $pdo = null): bool
+    {
+        $db = $pdo ?? getDB();
+        $fields = [];
+        $params = [':id' => $id];
+
+        if (array_key_exists('title', $data)) {
+            $fields[] = "title = :title";
+            $params[':title'] = $data['title'];
+        }
+        if (array_key_exists('photo_profile_url', $data)) {
+            $fields[] = "photo_profile_url = :photo_profile_url";
+            $params[':photo_profile_url'] = $data['photo_profile_url'];
+        }
+        if (empty($fields)) {
+            return true;
+        }
+
+        $stmt = $db->prepare("UPDATE circle SET " . implode(', ', $fields) . " WHERE id = :id");
+        return $stmt->execute($params);
+    }
+
+    /** Menghapus circle berdasarkan id circle. */
+    public static function deleteById(string $id, ?PDO $pdo = null): bool
+    {
+        $db = $pdo ?? getDB();
+        $stmt = $db->prepare("DELETE FROM circle WHERE id = :id");
+        return $stmt->execute([':id' => $id]);
+    }
+
+    /**
      * Daftar circle yang bisa diakses user: circle dari collaboration
      * yang ia miliki atau yang ia ikuti sebagai accepted member
      * (baris user_collaboration). Dipakai GET /api/circles.

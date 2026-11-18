@@ -203,6 +203,11 @@ $router->get('/api/circles', [AuthMiddleware::class, 'handle'], [CircleControlle
 $router->get('/api/circles/:circleId', [AuthMiddleware::class, 'handle'], [CircleController::class, 'getCircle']);
 $router->get('/api/circles/:circleId/zones', [AuthMiddleware::class, 'handle'], [CircleController::class, 'listZones']);
 $router->get('/api/circles/:circleId/zones/:zoneId', [AuthMiddleware::class, 'handle'], [CircleController::class, 'getZone']);
+$router->post('/api/circles/:circleId/zones', [AuthMiddleware::class, 'handle'], [CircleController::class, 'createZone']);
+$router->put('/api/circles/:circleId/zones/:zoneId', [AuthMiddleware::class, 'handle'], [CircleController::class, 'updateZone']);
+$router->delete('/api/circles/:circleId/zones/:zoneId', [AuthMiddleware::class, 'handle'], [CircleController::class, 'deleteZone']);
+$router->put('/api/circles/:circleId', [AuthMiddleware::class, 'handle'], [CircleController::class, 'updateCircle']);
+$router->delete('/api/circles/:circleId', [AuthMiddleware::class, 'handle'], [CircleController::class, 'deleteCircle']);
 $router->get('/api/circles/:circleId/zones/:zoneId/messages', [AuthMiddleware::class, 'handle'], [CircleController::class, 'listMessages']);
 $router->post('/api/circles/:circleId/zones/:zoneId/messages', [AuthMiddleware::class, 'handle'], [CircleController::class, 'sendMessage']);
 

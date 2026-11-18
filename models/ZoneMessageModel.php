@@ -126,6 +126,26 @@ class ZoneMessageModel
     /**
      * Helper: Generate UUID v4 standar (RFC 4122).
      */
+    /** Menghapus semua pesan di satu zone (dipakai saat zone dihapus). */
+    public static function deleteByZoneId(string $zoneId, ?PDO $pdo = null): bool
+    {
+        $db = $pdo ?? getDB();
+        $stmt = $db->prepare("DELETE FROM zone_messages WHERE zone_id = :zone_id");
+        return $stmt->execute([':zone_id' => $zoneId]);
+    }
+
+    /** Menghapus semua pesan di semua zone milik satu circle. */
+    public static function deleteByCircleId(string $circleId, ?PDO $pdo = null): bool
+    {
+        $db = $pdo ?? getDB();
+        $stmt = $db->prepare(
+            "DELETE zm FROM zone_messages zm
+             JOIN zone z ON z.id = zm.zone_id
+             WHERE z.circle_id = :circle_id"
+        );
+        return $stmt->execute([':circle_id' => $circleId]);
+    }
+
     public static function generateUuid(): string
     {
         $data = random_bytes(16);
