@@ -49,10 +49,10 @@ class UploadController
     private const ATTACHMENT_MAX_SIZE = 5 * 1024 * 1024;
 
     /** Ekstensi lampiran gambar yang diterima. */
-    private const ATTACHMENT_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg'];
+    private const ATTACHMENT_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp'];
 
     /** Ekstensi lampiran dokumen yang diterima. */
-    private const ATTACHMENT_DOCUMENT_EXTENSIONS = ['pdf', 'doc', 'docx', 'xls', 'xlsx'];
+    private const ATTACHMENT_DOCUMENT_EXTENSIONS = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'md', 'txt', 'csv', 'ppt', 'pptx', 'zip'];
 
     /**
      * Handler untuk POST /api/upload
