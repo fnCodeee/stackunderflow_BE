@@ -33,6 +33,7 @@ declare(strict_types=1);
 require_once BASE_PATH . '/models/CollabModel.php';
 require_once BASE_PATH . '/models/CircleModel.php';
 require_once BASE_PATH . '/models/CircleZoneModel.php';
+require_once BASE_PATH . '/models/ZoneReadModel.php';
 require_once BASE_PATH . '/models/ZoneMessageModel.php';
 require_once BASE_PATH . '/utils/Realtime.php';
 require_once BASE_PATH . '/utils/Response.php';
@@ -122,14 +123,24 @@ class CircleController
                 Response::json(null, 401, 'Unauthorized', false);
             }
 
+            $circleRows = CircleModel::listForUser((string) $userId);
+            $unreadTotals = ZoneReadModel::unreadCountsForCircles(
+                array_map(
+                    static fn (array $r): string => (string) $r['id'],
+                    $circleRows
+                ),
+                (string) $userId
+            );
+
             $result = [];
-            foreach (CircleModel::listForUser((string) $userId) as $row) {
+            foreach ($circleRows as $row) {
                 $members = CollabModel::acceptedMembers((string) $row['collaboration_id']);
                 $result[] = [
                     'id' => $row['id'],
                     'projectId' => $row['collaboration_id'],
                     'title' => $row['title'],
                     'photoProfileUrl' => $row['photo_profile_url'] ?? null,
+                    'unreadCount' => $unreadTotals[(string) $row['id']] ?? 0,
                     'status' => $row['status'],
                     'isOwner' => ($row['user_id'] ?? null) === (string) $userId,
                     'memberNames' => array_map(
@@ -657,9 +668,27 @@ class CircleController
     {
         $ownerId = (string) ($collab['user_id'] ?? '');
 
+        $zoneRows = CircleZoneModel::listByCircleId((string) $circle['id']);
+        $zoneIds = array_map(
+            static fn (array $z): string => (string) $z['id'],
+            $zoneRows
+        );
+        $readerId = (string) ($GLOBALS['user']['id'] ?? '');
+        $unreadMap = $readerId !== ''
+            ? ZoneReadModel::unreadCountsForZones($zoneIds, $readerId)
+            : [];
+        $lastReadMap = $readerId !== ''
+            ? ZoneReadModel::lastReadForZones($zoneIds, $readerId)
+            : [];
+
         $zones = array_map(
-            static fn (array $z): array => self::presentZone($z, $isOwner),
-            CircleZoneModel::listByCircleId((string) $circle['id'])
+            static fn (array $z): array => self::presentZone(
+                $z,
+                $isOwner,
+                $unreadMap[(string) $z['id']] ?? 0,
+                $lastReadMap[(string) $z['id']] ?? null
+            ),
+            $zoneRows
         );
 
         $members = array_map(
@@ -684,6 +713,36 @@ class CircleController
     }
 
     /**
+     * POST /api/circles/:circleId/zones/:zoneId/read
+     * Tandai zone sebagai sudah dibaca oleh user yang request
+     * (indikator unread gaya Discord di frontend).
+     */
+    public static function markZoneRead(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $access = self::resolveAccess((string) ($params['circleId'] ?? ''), (string) $userId);
+            $zone = self::resolveZone($access, (string) ($params['zoneId'] ?? ''));
+
+            ZoneReadModel::markRead((string) $zone['id'], (string) $userId);
+
+            Response::json(
+                ['zoneId' => $zone['id'], 'unreadCount' => 0],
+                200,
+                'Zone marked as read',
+                true
+            );
+        } catch (Throwable $e) {
+            error_log('[CIRCLE ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat menandai zone', false);
+        }
+    }
+
+    /**
      * Bentuk zone untuk frontend. `memberCanPost` dihitung untuk
      * user yang sedang request: zone dengan allow_public_message = 0
      * (announcements) hanya bisa diisi owner.
@@ -691,7 +750,7 @@ class CircleController
      * @param  array<string, mixed> $zone
      * @return array<string, mixed>
      */
-    private static function presentZone(array $zone, bool $isOwner): array
+    private static function presentZone(array $zone, bool $isOwner, int $unreadCount = 0, ?string $lastRead = null): array
     {
         $publicCanPost = (int) ($zone['allow_public_message'] ?? 0) === 1;
 
@@ -700,9 +759,8 @@ class CircleController
             'title' => $zone['title'],
             'memberCanPost' => $publicCanPost || $isOwner,
             'allowPublicMessage' => $publicCanPost,
-            // Diisi endpoint messaging pada Phase 2 (id pesan terakhir
-            // yang dibaca user); Phase 1 belum ada pesan sama sekali.
-            'lastRead' => null,
+            'unreadCount' => $unreadCount,
+            'lastRead' => $lastRead,
         ];
     }
 }

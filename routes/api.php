@@ -210,6 +210,7 @@ $router->put('/api/circles/:circleId', [AuthMiddleware::class, 'handle'], [Circl
 $router->delete('/api/circles/:circleId', [AuthMiddleware::class, 'handle'], [CircleController::class, 'deleteCircle']);
 $router->get('/api/circles/:circleId/zones/:zoneId/messages', [AuthMiddleware::class, 'handle'], [CircleController::class, 'listMessages']);
 $router->post('/api/circles/:circleId/zones/:zoneId/messages', [AuthMiddleware::class, 'handle'], [CircleController::class, 'sendMessage']);
+$router->post('/api/circles/:circleId/zones/:zoneId/read', [AuthMiddleware::class, 'handle'], [CircleController::class, 'markZoneRead']);
 
 // ── SKILLS MODULE ─────────────────────────────────────────────────────────────
 // GET /api/skills: skill system + private skill milik user yang sedang login
