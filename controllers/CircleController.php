@@ -21,8 +21,10 @@
  *  - Status collaboration dikirim sebagai key mentah (mis. "open");
  *    label tampilan diterjemahkan oleh frontend.
  *
- * Endpoint messaging belum ada di Phase 1 (roadmap BE: fondasi,
- * messaging, reactions/pin/attachments, resources, realtime).
+ * Phase 2 (messaging): POST/GET pesan per zone di controller ini
+ * juga. Pesan tersimpan disiarkan live lewat utils/Realtime
+ * (event zone-message) ke semua anggota. Reactions/pin/attachments
+ * tetap belum ada (Phase 3).
  * =============================================================================
  */
 
@@ -31,6 +33,8 @@ declare(strict_types=1);
 require_once BASE_PATH . '/models/CollabModel.php';
 require_once BASE_PATH . '/models/CircleModel.php';
 require_once BASE_PATH . '/models/CircleZoneModel.php';
+require_once BASE_PATH . '/models/ZoneMessageModel.php';
+require_once BASE_PATH . '/utils/Realtime.php';
 require_once BASE_PATH . '/utils/Response.php';
 
 class CircleController
@@ -228,6 +232,116 @@ class CircleController
     }
 
     /**
+     * GET /api/circles/:circleId/zones/:zoneId/messages
+     * Riwayat pesan satu zone, urutan kronologis (tertua -> terbaru).
+     * Query: limit (default 50, maks 100) dan kursor before_ts +
+     * before_id (pesan tertua yang sudah dimiliki klien) untuk
+     * memuat pesan yang lebih lama. Response data:
+     * { messages: [...], hasMore: bool }.
+     *
+     * @param  array<string, string> $params
+     */
+    public static function listMessages(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $access = self::resolveAccess((string) ($params['circleId'] ?? ''), (string) $userId);
+            $zone = self::resolveZone($access, (string) ($params['zoneId'] ?? ''));
+
+            $limit = max(1, min(100, (int) ($_GET['limit'] ?? 50)));
+            $beforeTs = trim((string) ($_GET['before_ts'] ?? ''));
+            $beforeId = trim((string) ($_GET['before_id'] ?? ''));
+            $before = ($beforeTs !== '' && $beforeId !== '')
+                ? ['timestamp' => $beforeTs, 'id' => $beforeId]
+                : null;
+
+            // Ambil satu baris ekstra untuk tahu masih ada pesan
+            // yang lebih lama di luar halaman ini.
+            $rows = ZoneMessageModel::listByZone((string) $zone['id'], $limit + 1, $before);
+            $hasMore = count($rows) > $limit;
+            if ($hasMore) {
+                array_pop($rows);
+            }
+
+            $messages = array_map(
+                static fn (array $r): array => self::presentMessage($r),
+                array_reverse($rows)
+            );
+
+            Response::json(
+                ['messages' => $messages, 'hasMore' => $hasMore],
+                200,
+                'Messages retrieved successfully',
+                true
+            );
+        } catch (Throwable $e) {
+            error_log('[CIRCLE ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat mengambil pesan', false);
+        }
+    }
+
+    /**
+     * POST /api/circles/:circleId/zones/:zoneId/messages
+     * Kirim pesan teks ke satu zone. Body: { content }.
+     * Aturan kirim mengikuti memberCanPost zone itu untuk user yang
+     * request: announcements menolak anggota biasa (403), general
+     * menerima semua anggota. Pesan yang tersimpan langsung
+     * disiarkan ke semua anggota lewat server realtime.
+     *
+     * @param  array<string, string> $params
+     */
+    public static function sendMessage(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $access = self::resolveAccess((string) ($params['circleId'] ?? ''), (string) $userId);
+            $zone = self::resolveZone($access, (string) ($params['zoneId'] ?? ''));
+
+            $canPost = (int) ($zone['allow_public_message'] ?? 0) === 1 || $access['isOwner'];
+            if (!$canPost) {
+                Response::json(null, 403, 'Only the project owner can post in this zone', false);
+            }
+
+            $body = $GLOBALS['body'] ?? [];
+            $content = trim((string) ($body['content'] ?? ''));
+            if ($content === '') {
+                Response::json(null, 400, 'Message cannot be empty', false);
+            }
+            if (mb_strlen($content) > 2000) {
+                Response::json(null, 400, 'Message is too long (max 2000 characters)', false);
+            }
+
+            $row = ZoneMessageModel::create((string) $zone['id'], (string) $userId, $content);
+            $message = self::presentMessage($row);
+
+            // Siaran live ke semua anggota circle (pengirim termasuk,
+            // untuk tab/perangkat lain miliknya). Best-effort:
+            // Realtime::publish tidak pernah throw.
+            foreach (CollabModel::acceptedMembers((string) $access['circle']['collaboration_id']) as $member) {
+                Realtime::publishZoneMessage(
+                    (string) $member['id'],
+                    (string) $access['circle']['id'],
+                    (string) $zone['id'],
+                    $message
+                );
+            }
+
+            Response::json($message, 201, 'Message sent successfully', true);
+        } catch (Throwable $e) {
+            error_log('[CIRCLE ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat mengirim pesan', false);
+        }
+    }
+
+    /**
      * Mengambil circle + collaboration dan memastikan user berhak
      * mengaksesnya (owner atau accepted member). Mengirim response
      * error (404/403) dan menghentikan eksekusi bila tidak berhak.
@@ -252,6 +366,42 @@ class CircleController
         }
 
         return ['circle' => $circle, 'collab' => $collab, 'isOwner' => $isOwner];
+    }
+
+    /**
+     * Mengambil satu zone dan memastikan zone itu milik circle dari
+     * hasil resolveAccess. Mengirim 404 dan berhenti bila tidak.
+     *
+     * @param  array{circle: array<string, mixed>, collab: array<string, mixed>, isOwner: bool} $access
+     * @return array<string, mixed>
+     */
+    private static function resolveZone(array $access, string $zoneId): array
+    {
+        $zone = $zoneId !== '' ? CircleZoneModel::findById($zoneId) : null;
+        if ($zone === null || ($zone['circle_id'] ?? null) !== (string) $access['circle']['id']) {
+            Response::json(null, 404, 'Zone not found', false);
+        }
+
+        return $zone;
+    }
+
+    /**
+     * Bentuk pesan zone untuk frontend + payload realtime.
+     *
+     * @param  array<string, mixed> $row Baris zone_messages + username + photo_profile_url
+     * @return array<string, mixed>
+     */
+    private static function presentMessage(array $row): array
+    {
+        return [
+            'id' => $row['id'],
+            'zoneId' => $row['zone_id'],
+            'authorId' => $row['user_id'],
+            'authorName' => $row['username'] ?? '',
+            'authorAvatarUrl' => $row['photo_profile_url'] ?? null,
+            'content' => $row['message'],
+            'createdAt' => $row['timestamp'],
+        ];
     }
 
     /**

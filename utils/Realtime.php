@@ -160,4 +160,24 @@ class Realtime
             'payload' => ['conversationId' => $conversationId],
         ]);
     }
+
+    /**
+     * Push satu pesan zone Circle baru ke satu anggota
+     * (CircleController memanggil ini sekali per anggota circle)
+     * supaya pesannya muncul live tanpa menunggu polling.
+     *
+     * @param  string $userId   UUID anggota penerima
+     * @param  string $circleId UUID circle pemilik zone
+     * @param  string $zoneId   UUID zone tempat pesan dikirim
+     * @param  array<string, mixed> $message Pesan bentuk API (CircleController::presentMessage)
+     * @return void
+     */
+    public static function publishZoneMessage(string $userId, string $circleId, string $zoneId, array $message): void
+    {
+        self::publish([
+            'type' => 'zone-message',
+            'userId' => $userId,
+            'payload' => ['circleId' => $circleId, 'zoneId' => $zoneId, 'message' => $message],
+        ]);
+    }
 }
