@@ -65,6 +65,14 @@ class ProfileController
                 Response::json(null, 400, 'bio harus berupa string', false);
             }
 
+            if (array_key_exists('profile_detail', $body) && !is_string($body['profile_detail']) && !is_null($body['profile_detail'])) {
+                Response::json(null, 400, 'profile_detail harus berupa string', false);
+            }
+
+            if (array_key_exists('profile_detail', $body) && is_string($body['profile_detail']) && strlen($body['profile_detail']) > 20000) {
+                Response::json(null, 400, 'profile_detail maksimal 20000 karakter', false);
+            }
+
             if (array_key_exists('photo_profile_url', $body) && !is_string($body['photo_profile_url']) && !is_null($body['photo_profile_url'])) {
                 Response::json(null, 400, 'photo_profile_url harus berupa string', false);
             }
@@ -146,6 +154,10 @@ class ProfileController
                 $updateData['bio'] = $body['bio'] !== null ? (string) $body['bio'] : null;
             }
 
+            if (array_key_exists('profile_detail', $body)) {
+                $updateData['profile_detail'] = $body['profile_detail'] !== null ? (string) $body['profile_detail'] : null;
+            }
+
             if (array_key_exists('photo_profile_url', $body)) {
                 $updateData['photo_profile_url'] = $body['photo_profile_url'] !== null ? (string) $body['photo_profile_url'] : null;
             }
@@ -193,6 +205,7 @@ class ProfileController
                 'user_id'                 => $updatedProfile['user_id'],
                 'full_name'               => $updatedProfile['full_name'] ?? '',
                 'bio'                     => $updatedProfile['bio'] ?? '',
+                'profile_detail'          => $updatedProfile['profile_detail'] ?? '',
                 'photo_profile_url'       => $updatedProfile['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
                 'photo_profile_public_id' => $updatedProfile['photo_profile_public_id'] ?? '',
                 'theme_mode'                => $updatedProfile['theme_mode'] ?? null,

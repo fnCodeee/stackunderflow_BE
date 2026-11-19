@@ -480,6 +480,7 @@ class AuthController
                 'email_verified'          => !empty($user['email_verified_at']),
                 'full_name'               => $profile['full_name'] ?? '',
                 'bio'                     => $profile['bio'] ?? '',
+                'profile_detail'          => $profile['profile_detail'] ?? '',
                 'photo_profile_url'       => $profile['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
                 'photo_profile_public_id' => $profile['photo_profile_public_id'] ?? '',
                 'theme_mode'                => $profile['theme_mode'] ?? null,

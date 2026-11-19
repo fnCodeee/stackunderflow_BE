@@ -47,6 +47,7 @@ class UserController
                 'aliases' => [$user['id']],
                 'name' => ($profile['full_name'] ?? '') !== '' ? $profile['full_name'] : $user['username'],
                 'bio' => $profile['bio'] ?? '',
+                'profileDetail' => $profile['profile_detail'] ?? null,
                 'email' => $user['email'] ?? '',
                 'username' => $user['username'] ?? '',
                 'avatarUrl' => $profile['photo_profile_url'] ?? null,
