@@ -76,7 +76,7 @@ class UserController
      * GET /api/users/:id/activity: per-day collaboration activity for
      * the profile heatmap. Counts posts, visible comments, projects
      * created and projects joined (other people's) over the last
-     * 182 days, merged into one date => count map plus per-source
+     * 365 days, merged into one date => count map plus per-source
      * totals. Soft-deleted and AI-removed content never counts.
      */
     public static function getUserActivity(array $params = []): void
@@ -93,7 +93,7 @@ class UserController
                 Response::json(null, 404, 'User not found', false);
             }
 
-            $since = date('Y-m-d', strtotime('-181 days'));
+            $since = date('Y-m-d', strtotime('-364 days'));
             $pdo = getDB();
             $sources = [
                 'posts' => "SELECT DATE(created_at) AS d, COUNT(*) AS c FROM public_posts WHERE user_id = :uid AND deleted_at IS NULL AND created_at >= :since GROUP BY DATE(created_at)",
