@@ -48,6 +48,8 @@ class UserController
                 'name' => ($profile['full_name'] ?? '') !== '' ? $profile['full_name'] : $user['username'],
                 'bio' => $profile['bio'] ?? '',
                 'email' => $user['email'] ?? '',
+                'username' => $user['username'] ?? '',
+                'avatarUrl' => $profile['photo_profile_url'] ?? null,
                 'socials' => array_map(static function (array $s): array {
                     return [
                         'label' => $s['platform'] ?? '',
