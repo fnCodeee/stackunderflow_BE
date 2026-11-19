@@ -50,6 +50,7 @@ class UserController
                 'email' => $user['email'] ?? '',
                 'username' => $user['username'] ?? '',
                 'avatarUrl' => $profile['photo_profile_url'] ?? null,
+                'createdAt' => $user['created_at'] ?? null,
                 'socials' => array_map(static function (array $s): array {
                     return [
                         'label' => $s['platform'] ?? '',
@@ -67,6 +68,64 @@ class UserController
         } catch (Throwable $e) {
             error_log('[USER ERROR] ' . $e->getMessage());
             Response::json(null, 500, 'Terjadi kesalahan pada server saat mengambil data pengguna', false);
+        }
+    }
+
+    /**
+     * GET /api/users/:id/activity: per-day collaboration activity for
+     * the profile heatmap. Counts posts, visible comments, projects
+     * created and projects joined (other people's) over the last
+     * 182 days, merged into one date => count map plus per-source
+     * totals. Soft-deleted and AI-removed content never counts.
+     */
+    public static function getUserActivity(array $params = []): void
+    {
+        try {
+            $id = $params['id'] ?? '';
+            if ($id === 'me') {
+                $id = $GLOBALS['user']['id'] ?? '';
+                if ($id === '') {
+                    Response::json(null, 401, 'Unauthorized', false);
+                }
+            }
+            if ($id === '' || !UserModel::findById($id)) {
+                Response::json(null, 404, 'User not found', false);
+            }
+
+            $since = date('Y-m-d', strtotime('-181 days'));
+            $pdo = getDB();
+            $sources = [
+                'posts' => "SELECT DATE(created_at) AS d, COUNT(*) AS c FROM public_posts WHERE user_id = :uid AND deleted_at IS NULL AND created_at >= :since GROUP BY DATE(created_at)",
+                'comments' => "SELECT DATE(created_at) AS d, COUNT(*) AS c FROM comments WHERE user_id = :uid AND deleted_at IS NULL AND moderation_state = 'visible' AND created_at >= :since GROUP BY DATE(created_at)",
+                'projectsCreated' => "SELECT DATE(created_at) AS d, COUNT(*) AS c FROM collaborations WHERE user_id = :uid AND deleted_at IS NULL AND created_at >= :since GROUP BY DATE(created_at)",
+                'projectsJoined' => "SELECT DATE(uc.created_at) AS d, COUNT(*) AS c FROM user_collaboration uc JOIN collaborations c ON c.id = uc.collaboration_id WHERE uc.user_id = :uid AND c.user_id <> :uidOther AND c.deleted_at IS NULL AND uc.created_at >= :since GROUP BY DATE(uc.created_at)",
+            ];
+            $days = [];
+            $totals = ['posts' => 0, 'comments' => 0, 'projectsCreated' => 0, 'projectsJoined' => 0];
+            foreach ($sources as $key => $sql) {
+                $stmt = $pdo->prepare($sql);
+                $stmt->bindValue(':uid', $id);
+                if ($key === 'projectsJoined') {
+                    $stmt->bindValue(':uidOther', $id);
+                }
+                $stmt->bindValue(':since', $since);
+                $stmt->execute();
+                foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                    $count = (int) $row['c'];
+                    $totals[$key] += $count;
+                    $days[$row['d']] = ($days[$row['d']] ?? 0) + $count;
+                }
+            }
+            ksort($days);
+            $totals['total'] = array_sum($totals);
+            Response::json([
+                'days' => $days,
+                'totals' => $totals,
+                'since' => $since,
+            ], 200, 'User activity', true);
+        } catch (Throwable $e) {
+            error_log('[USER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat mengambil aktivitas pengguna', false);
         }
     }
 }

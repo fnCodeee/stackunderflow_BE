@@ -230,6 +230,7 @@ $router->delete('/api/skills/:id', [AuthMiddleware::class, 'handle'], [SkillCont
 // GET /api/users/:id: public person detail for the profile page
 // (added 2026-11-10; "me" resolves to the logged-in user).
 $router->get('/api/users/:id', [OptionalAuthMiddleware::class, 'handle'], [UserController::class, 'getUser']);
+$router->get('/api/users/:id/activity', [OptionalAuthMiddleware::class, 'handle'], [UserController::class, 'getUserActivity']);
 
 // ── Reports + Admin (spec-admin) ─────────────────────────────────────────────
 $router->post('/api/reports', [AuthMiddleware::class, 'handle'], [ReportController::class, 'create']);
