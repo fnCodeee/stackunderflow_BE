@@ -15,6 +15,7 @@
 declare(strict_types=1);
 
 require_once BASE_PATH . '/models/SkillModel.php';
+require_once BASE_PATH . '/models/UserSkillModel.php';
 require_once BASE_PATH . '/utils/SkillGuard.php';
 require_once BASE_PATH . '/utils/Response.php';
 
@@ -108,6 +109,16 @@ class SkillController
                 $skill = SkillModel::createPrivate($skillName, $userId);
             } catch (InvalidArgumentException $e) {
                 Response::json(null, 409, $e->getMessage(), false);
+            }
+
+            // 3b. Skill pribadi langsung tampil di profile pemiliknya:
+            // relasi user_skill adalah daftar skill yang di-show di
+            // profile. Kegagalan relasi tidak menggagalkan pembuatan
+            // skill, cukup dicatat di log.
+            try {
+                UserSkillModel::add($userId, (string) $skill['id']);
+            } catch (Throwable $linkError) {
+                error_log('[SKILL LINK ERROR] ' . $linkError->getMessage());
             }
 
             Response::json($skill, 200, 'Skill berhasil dibuat!', true);
