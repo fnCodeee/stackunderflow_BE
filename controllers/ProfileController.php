@@ -101,6 +101,10 @@ class ProfileController
                     ) {
                         Response::json(null, 400, 'Setiap item social_media wajib memiliki platform dan url bertipe string', false);
                     }
+
+                    if (!preg_match('#^https?://#i', trim($item['url']))) {
+                        Response::json(null, 400, 'URL social_media harus diawali http:// atau https://', false);
+                    }
                 }
             }
 

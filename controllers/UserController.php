@@ -54,7 +54,7 @@ class UserController
                 'createdAt' => $user['created_at'] ?? null,
                 'socials' => array_map(static function (array $s): array {
                     return [
-                        'label' => $s['platform'] ?? '',
+                        'label' => self::compactUrl((string) ($s['url'] ?? '')),
                         'icon' => strtolower((string) ($s['platform'] ?? '')),
                         'href' => $s['url'] ?? '',
                     ];
@@ -79,6 +79,19 @@ class UserController
      * 365 days, merged into one date => count map plus per-source
      * totals. Soft-deleted and AI-removed content never counts.
      */
+    /** "https://www.github.com/user/" -> "github.com/user" for rail labels. */
+    private static function compactUrl(string $url): string
+    {
+        $url = trim($url);
+        $parts = parse_url($url);
+        if ($parts === false || empty($parts['host'])) {
+            return $url;
+        }
+        $host = preg_replace('/^www\./', '', (string) $parts['host']);
+        $path = isset($parts['path']) ? rtrim((string) $parts['path'], '/') : '';
+        return $host . $path;
+    }
+
     public static function getUserActivity(array $params = []): void
     {
         try {
