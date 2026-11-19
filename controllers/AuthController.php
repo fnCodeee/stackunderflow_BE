@@ -621,11 +621,7 @@ class AuthController
                 $user = UserModel::findByEmail($email);
                 if ($user !== null) {
                     $token = PasswordResetModel::create((string) $user['id']);
-                    $base = trim((string) ($_ENV['FRONTEND_URL'] ?? ''));
-                    if ($base === '') {
-                        $base = 'http://localhost:3000';
-                    }
-                    $link = rtrim($base, '/') . '/reset-password?token=' . $token;
+                    $link = self::frontendBaseUrl() . '/reset-password?token=' . $token;
                     $username = (string) ($user['username'] ?? '');
                     $text = "Halo @{$username},
 
@@ -707,13 +703,47 @@ class AuthController
      * Susun + kirim email verifikasi (dipakai register & resend).
      * Mengembalikan hasil kirim dari SmtpMailer.
      */
-    private static function sendVerificationEmail(string $email, string $username, string $token): bool
+    /**
+     * Base URL frontend untuk link di email (verifikasi & reset
+     * password). Origin request dipakai bila masuk allowlist CORS
+     * (daftar yang sama dengan config/cors.php): link lalu memakai
+     * alamat yang sama dengan yang dipakai pendaftar membuka situs,
+     * jadi teman yang membuka situs lewat IP kampus / Tailscale
+     * menerima link yang benar-benar bisa ia buka, bukan localhost.
+     * Tanpa Origin yang cocok, jatuh ke FRONTEND_URL.
+     */
+    private static function frontendBaseUrl(): string
     {
+        $origin = trim((string) ($_SERVER['HTTP_ORIGIN'] ?? ''));
+        if ($origin !== '') {
+            $rawOrigins = trim((string) ($_ENV['CORS_ALLOWED_ORIGINS'] ?? ''));
+            if ($rawOrigins === '') {
+                $rawOrigins = trim((string) (getenv('CORS_ALLOWED_ORIGINS') ?: ''));
+            }
+            $allowedOrigins = $rawOrigins !== ''
+                ? array_values(array_filter(array_map('trim', explode(',', $rawOrigins))))
+                : [
+                    'http://localhost:3000',
+                    'http://127.0.0.1:3000',
+                    'http://localhost:3100',
+                    'http://127.0.0.1:3100',
+                    'http://100.121.159.106:3000',
+                    'http://10.61.4.201:3000',
+                ];
+            if (in_array($origin, $allowedOrigins, true)) {
+                return rtrim($origin, '/');
+            }
+        }
         $base = trim((string) ($_ENV['FRONTEND_URL'] ?? ''));
         if ($base === '') {
             $base = 'http://localhost:3000';
         }
-        $link = rtrim($base, '/') . '/verify-email?token=' . $token;
+        return rtrim($base, '/');
+    }
+
+    private static function sendVerificationEmail(string $email, string $username, string $token): bool
+    {
+        $link = self::frontendBaseUrl() . '/verify-email?token=' . $token;
         $text = "Halo @{$username},
 
 "
