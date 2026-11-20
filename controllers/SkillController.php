@@ -57,7 +57,8 @@ class SkillController
      *    tanpa alamat web / nomor telepon) + blocklist kata kasar,
      *    18+, dan judi online (ternormalisasi anti-leetspeak).
      *  - Maksimal 20 skill pribadi per user.
-     *  - Cegah duplikasi nama skill private milik user yang sama.
+     *  - Cegah duplikasi nama skill: tidak boleh sama (case-insensitive)
+     *    dengan skill system maupun skill private milik user sendiri.
      *  - scope & created_by ditentukan backend, bukan dari request.
      *
      * @param  array<string, string> $params Path parameters dari Router
@@ -104,7 +105,8 @@ class SkillController
                 Response::json(null, 400, SkillGuard::MSG_CAP, false);
             }
 
-            // 3. Buat skill private (model menangani pencegahan duplikasi user)
+            // 3. Buat skill private (model menangani pencegahan duplikasi:
+            //    nama tidak boleh menabrak skill system / milik user sendiri)
             try {
                 $skill = SkillModel::createPrivate($skillName, $userId);
             } catch (InvalidArgumentException $e) {
