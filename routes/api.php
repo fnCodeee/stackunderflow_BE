@@ -19,6 +19,7 @@ require_once BASE_PATH . '/controllers/ProfileController.php';
 require_once BASE_PATH . '/controllers/PostController.php';
 require_once BASE_PATH . '/controllers/CollabController.php';
 require_once BASE_PATH . '/controllers/CircleController.php';
+require_once BASE_PATH . '/controllers/PlannerController.php';
 require_once BASE_PATH . '/controllers/SkillController.php';
 require_once BASE_PATH . '/controllers/SearchController.php';
 require_once BASE_PATH . '/controllers/UserController.php';
@@ -215,6 +216,22 @@ $router->post('/api/circles/:circleId/zones/:zoneId/messages', [AuthMiddleware::
 $router->put('/api/circles/:circleId/zones/:zoneId/messages/:messageId', [AuthMiddleware::class, 'handle'], [CircleController::class, 'editMessage']);
 $router->delete('/api/circles/:circleId/zones/:zoneId/messages/:messageId', [AuthMiddleware::class, 'handle'], [CircleController::class, 'deleteMessage']);
 $router->post('/api/circles/:circleId/zones/:zoneId/read', [AuthMiddleware::class, 'handle'], [CircleController::class, 'markZoneRead']);
+
+// PLANNER MODULE (Tasks Fase 1, keputusan user 2026-11-23): planner
+// menempel ke collab seperti Circle tapi berdiri sendiri (tidak wajib
+// ada Circle). Owner mengaktifkan; anggota hanya bisa menggeser task
+// miliknya, owner + anggota ber-role PM boleh mengatur task siapa pun.
+$router->get('/api/collab/:id/planner', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'getPlanner']);
+$router->post('/api/collab/:id/planner/enable', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'enable']);
+$router->post('/api/collab/:id/planner/disable', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'disable']);
+$router->put('/api/collab/:id/planner/roles', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'setRole']);
+$router->post('/api/collab/:id/planner/sections', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'createSection']);
+$router->put('/api/collab/:id/planner/sections/:sectionId', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'updateSection']);
+$router->delete('/api/collab/:id/planner/sections/:sectionId', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'deleteSection']);
+$router->post('/api/collab/:id/planner/tasks', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'createTask']);
+$router->put('/api/collab/:id/planner/tasks/:taskId', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'updateTask']);
+$router->delete('/api/collab/:id/planner/tasks/:taskId', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'deleteTask']);
+$router->get('/api/me/tasks', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'myTasks']);
 
 // ── SKILLS MODULE ─────────────────────────────────────────────────────────────
 // GET /api/skills: skill system + private skill milik user yang sedang login

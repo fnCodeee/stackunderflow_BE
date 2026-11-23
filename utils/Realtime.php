@@ -237,4 +237,41 @@ class Realtime
             'payload' => ['circleId' => $circleId, 'zoneId' => $zoneId, 'messageId' => $messageId],
         ]);
     }
+
+    /**
+     * Beritahu satu anggota collab bahwa sebuah task planner berubah
+     * (dibuat, digeser, diselesaikan, dst) — PlannerController
+     * memanggil ini sekali per anggota supaya planner-nya ter-refresh
+     * live tanpa menunggu polling.
+     *
+     * @param  string $userId   UUID anggota penerima
+     * @param  string $collabId UUID collaboration pemilik planner
+     * @param  array<string, mixed> $task Task bentuk API (PlannerController::presentTask)
+     * @return void
+     */
+    public static function publishPlannerTask(string $userId, string $collabId, array $task): void
+    {
+        self::publish([
+            'type' => 'planner-task',
+            'userId' => $userId,
+            'payload' => ['collabId' => $collabId, 'task' => $task],
+        ]);
+    }
+
+    /**
+     * Beritahu satu anggota collab bahwa sebuah task planner dihapus.
+     *
+     * @param  string $userId   UUID anggota penerima
+     * @param  string $collabId UUID collaboration pemilik planner
+     * @param  string $taskId   UUID task yang dihapus
+     * @return void
+     */
+    public static function publishPlannerTaskDeleted(string $userId, string $collabId, string $taskId): void
+    {
+        self::publish([
+            'type' => 'planner-task',
+            'userId' => $userId,
+            'payload' => ['collabId' => $collabId, 'task' => ['id' => $taskId, 'deleted' => true]],
+        ]);
+    }
 }
