@@ -29,6 +29,25 @@ class Realtime
     }
 
     /**
+     * Header untuk POST /publish. Server realtime memverifikasi shared
+     * secret (env REALTIME_PUBLISH_SECRET di .env — file yang sama yang
+     * dibaca server.js) lewat header X-Publish-Secret; tanpa secret yang
+     * cocok publish ditolak 401 dan polling 5 detik yang meng-cover,
+     * jadi kegagalan di sini tidak menggagalkan aksi user.
+     *
+     * @return list<string>
+     */
+    private static function publishHeaders(): array
+    {
+        $headers = ['Content-Type: application/json'];
+        $secret = getenv('REALTIME_PUBLISH_SECRET') ?: '';
+        if ($secret !== '') {
+            $headers[] = 'X-Publish-Secret: ' . $secret;
+        }
+        return $headers;
+    }
+
+    /**
      * POST satu event ke server realtime. Tidak pernah throw.
      *
      * @param  array<string, mixed> $event Bentuk: ['type' => ..., 'userId'|'postId' => ..., 'payload' => [...]]
@@ -44,7 +63,7 @@ class Realtime
             curl_setopt_array($ch, [
                 CURLOPT_POST => true,
                 CURLOPT_POSTFIELDS => json_encode($event),
-                CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+                CURLOPT_HTTPHEADER => self::publishHeaders(),
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_CONNECTTIMEOUT_MS => 200,
                 CURLOPT_TIMEOUT_MS => 500,
