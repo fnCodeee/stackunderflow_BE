@@ -733,7 +733,7 @@ class CollabModel
             LEFT JOIN collaboration_applications ca
                 ON ca.collab_id = c.id AND ca.user_id = ? AND ca.status = 'pending'
             LEFT JOIN users u ON c.user_id = u.id
-            LEFT JOIN profiles pr ON pr.user_id = pr.user_id
+            LEFT JOIN profiles pr ON c.user_id = pr.user_id
             WHERE c.deleted_at IS NULL AND moderation_state = 'visible' AND (c.user_id = ? OR uc.user_id = ? OR ca.id IS NOT NULL) AND c.id = ?
         ";
 
