@@ -57,6 +57,22 @@ class InboxModel
         return $id === false ? null : (string) $id;
     }
 
+    /** ID percakapan 1:1 apa pun antara dua user (termasuk room aplikasi), atau null. Thread sistem dikecualikan. */
+    public static function findPairConversation(PDO $pdo, string $a, string $b): ?string
+    {
+        $stmt = $pdo->prepare("
+            SELECT p1.conversation_id
+            FROM dm_participants p1
+            JOIN dm_participants p2 ON p2.conversation_id = p1.conversation_id
+            JOIN dm_conversations c ON c.id = p1.conversation_id
+            WHERE p1.user_id = :a AND p2.user_id = :b AND c.kind != 'system'
+            LIMIT 1
+        ");
+        $stmt->execute([':a' => $a, ':b' => $b]);
+        $id = $stmt->fetchColumn();
+        return $id === false ? null : (string) $id;
+    }
+
     /** ID percakapan milik satu aplikasi, atau null. */
     public static function findByApplication(PDO $pdo, string $applicationId): ?string
     {
@@ -121,6 +137,12 @@ class InboxModel
     {
         $pdo = getDB();
         $existing = self::findDirectConversation($pdo, $me, $other);
+        if ($existing === null) {
+            // Belum ada room direct, tapi mungkin sudah ada room aplikasi
+            // dengan orang yang sama: lanjutkan di room itu saja supaya
+            // satu orang cukup punya satu room.
+            $existing = self::findPairConversation($pdo, $me, $other);
+        }
         if ($existing !== null) {
             self::restoreFor($pdo, $existing, $me, false);
             return $existing;
@@ -144,8 +166,18 @@ class InboxModel
         $conversationId = self::findByApplication($pdo, $applicationId);
         $created = false;
         if ($conversationId === null) {
-            $conversationId = self::createConversation($pdo, [$applicantId, $ownerId], $applicationId);
-            $created = true;
+            // Sudah ada room direct dengan owner (mis. dari tombol Chat
+            // sebelum apply)? Pakai room itu dan tautkan aplikasinya ke
+            // sana, jangan buat room kedua untuk orang yang sama.
+            $directId = self::findDirectConversation($pdo, $applicantId, $ownerId);
+            if ($directId !== null) {
+                $stmt = $pdo->prepare("UPDATE dm_conversations SET application_id = :app WHERE id = :id AND application_id IS NULL");
+                $stmt->execute([':app' => $applicationId, ':id' => $directId]);
+                $conversationId = $directId;
+            } else {
+                $conversationId = self::createConversation($pdo, [$applicantId, $ownerId], $applicationId);
+                $created = true;
+            }
         }
 
         // Thread muncul lagi di daftar pelamar (dan pemilik, kalau ada pesan baru).
