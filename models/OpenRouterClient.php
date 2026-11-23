@@ -3,9 +3,10 @@
 /**
  * models/OpenRouterClient.php
  * ─────────────────────────────────────────────────────────────────────────────
- * Klien tipis chat completions untuk penilaian moderasi. Dua
- * provider kompatibel OpenAI dipakai: OpenRouter dan xKiro;
- * provider dipilih per model dari config 'model_providers'.
+ * Klien tipis chat completions untuk penilaian moderasi. Tiga
+ * provider kompatibel OpenAI dipakai: OpenRouter, xKiro, dan
+ * Token Harbor (ditambahkan 2026-11-20); provider dipilih per
+ * model dari config 'model_providers'.
  * Satu method: judge() menilai satu konten (gambar dan/atau teks)
  * dengan satu model dan mengembalikan skor terstruktur.
  * Semua kegagalan (HTTP, jaringan, JSON rusak) dilempar sebagai
@@ -21,11 +22,11 @@ class OpenRouterClient
     /**
      * @return array{scores: array, usage: array, latency_ms: int}
      */
-    /** Provider penampung model: 'xkiro' atau 'openrouter'. */
+    /** Provider penampung model: 'xkiro', 'tokenharbor', atau 'openrouter'. */
     public static function providerFor(array $cfg, string $model): string
     {
         $provider = $cfg['model_providers'][$model] ?? 'openrouter';
-        return $provider === 'xkiro' ? 'xkiro' : 'openrouter';
+        return in_array($provider, ['xkiro', 'tokenharbor'], true) ? $provider : 'openrouter';
     }
 
     /**
@@ -45,6 +46,17 @@ class OpenRouterClient
                 'endpoint' => (string) ($cfg['xkiro_endpoint'] ?? 'https://api.xkiro.com/v1/chat/completions'),
                 'api_key' => $apiKey,
                 'label' => 'xKiro',
+            ];
+        }
+        if (self::providerFor($cfg, $model) === 'tokenharbor') {
+            $apiKey = (string) ($cfg['tokenharbor_api_key'] ?? '');
+            if ($apiKey === '') {
+                throw new RuntimeException('TOKENHARBOR_API_KEY kosong.');
+            }
+            return [
+                'endpoint' => (string) ($cfg['tokenharbor_endpoint'] ?? 'https://tokenharbor.ai/v1/chat/completions'),
+                'api_key' => $apiKey,
+                'label' => 'TokenHarbor',
             ];
         }
         $apiKey = (string) ($cfg['api_key'] ?? '');
@@ -96,9 +108,11 @@ class OpenRouterClient
             'Content-Type: application/json',
             'Authorization: Bearer ' . $apiKey,
         ];
-        if ($route['label'] === 'xKiro') {
+        if (in_array($route['label'], ['xKiro', 'TokenHarbor'], true)) {
             // Cloudflare di depan api.xkiro.com menolak user agent
             // bawaan cURL (error 1010); UA browser wajib disertakan.
+            // Token Harbor disertakan juga sebagai pencegahan
+            // penyaringan bot generik di depan agregator.
             $headers[] = 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
         }
 

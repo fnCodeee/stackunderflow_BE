@@ -84,7 +84,7 @@ try {
 check('label kata_kasar', AiModerationService::categoryLabel('kata_kasar') === 'Profanity');
 check('label judol', AiModerationService::categoryLabel('judol') === 'Gambling promotion');
 check('label kategori asing apa adanya', AiModerationService::categoryLabel('lainnya') === 'lainnya');
-check('prompt_version v4', $cfg['prompt_version'] === 'v4');
+check('prompt_version v7', $cfg['prompt_version'] === 'v7');
 
 // Bahasa alasan mengikuti bahasa konten (keputusan user
 // 2026-11-17): deteksi kata penanda, kosong berarti Inggris.
@@ -97,18 +97,21 @@ check('bahasa alasan makian EN', AiModerationService::reasonLanguageFor('you are
 check('bahasa alasan kosong -> en', AiModerationService::reasonLanguageFor('') === 'en');
 check('bahasa alasan null -> en', AiModerationService::reasonLanguageFor(null) === 'en');
 
-// Routing provider (2026-11-17): primary pindah ke xKiro, eskalasi
-// zona abu-abu ke Nemotron, rem kuota menjaga free OpenRouter.
+// Routing provider (2026-11-17, diperbarui 2026-11-20): primary
+// di xKiro, eskalasi zona abu-abu pindah ke DeepSeek free di
+// Token Harbor, rem kuota hanya menjaga free OpenRouter.
 check('provider mistral -> xkiro', OpenRouterClient::providerFor($cfg, 'mistralai/mistral-medium-3.5') === 'xkiro');
+check('provider deepseek -> tokenharbor', OpenRouterClient::providerFor($cfg, 'deepseek-v4.1-flash:free') === 'tokenharbor');
 check('provider nemotron -> openrouter', OpenRouterClient::providerFor($cfg, 'nvidia/nemotron-3.5-super-vl:free') === 'openrouter');
 check('primary mistral medium', $cfg['primary_model'] === 'mistralai/mistral-medium-3.5');
-check('eskalasi nemotron', $cfg['escalation_model'] === 'nvidia/nemotron-3.5-super-vl:free');
+check('eskalasi deepseek', $cfg['escalation_model'] === 'deepseek-v4.1-flash:free');
 $chainFull = AiModerationService::chainFor($cfg, false);
-check('rantai penuh mulai dari mistral', $chainFull[0] === 'mistralai/mistral-medium-3.5' && count($chainFull) === 4);
+check('rantai penuh mulai dari mistral', $chainFull[0] === 'mistralai/mistral-medium-3.5' && count($chainFull) === 5);
+check('rantai penuh deepseek kedua', $chainFull[1] === 'deepseek-v4.1-flash:free');
 $chainCapped = AiModerationService::chainFor($cfg, true);
-check('rantai rem aktif tanpa free openrouter', !in_array('nvidia/nemotron-3.5-super-vl:free', $chainCapped, true) && !in_array('inclusionai/ling-3.2-flash:free', $chainCapped, true) && in_array('mistralai/mistral-medium-3.5', $chainCapped, true) && in_array('qwen/qwen3.8-omni-flash', $chainCapped, true));
-check('eskalasi efektif tanpa rem nemotron', AiModerationService::effectiveEscalationModel($cfg, false) === 'nvidia/nemotron-3.5-super-vl:free');
-check('eskalasi efektif rem aktif qwen', AiModerationService::effectiveEscalationModel($cfg, true) === 'qwen/qwen3.8-omni-flash');
+check('rantai rem aktif tanpa free openrouter', !in_array('nvidia/nemotron-3.5-super-vl:free', $chainCapped, true) && !in_array('inclusionai/ling-3.2-flash:free', $chainCapped, true) && in_array('mistralai/mistral-medium-3.5', $chainCapped, true) && in_array('deepseek-v4.1-flash:free', $chainCapped, true) && in_array('qwen/qwen3.8-omni-flash', $chainCapped, true));
+check('eskalasi efektif tanpa rem deepseek', AiModerationService::effectiveEscalationModel($cfg, false) === 'deepseek-v4.1-flash:free');
+check('eskalasi efektif rem aktif tetap deepseek', AiModerationService::effectiveEscalationModel($cfg, true) === 'deepseek-v4.1-flash:free');
 
 echo $failures === 0 ? "\nSEMUA LULUS\n" : "\n$failures GAGAL\n";
 exit($failures === 0 ? 0 : 1);

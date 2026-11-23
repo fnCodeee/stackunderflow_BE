@@ -172,15 +172,21 @@ class AiModerationService
     }
 
     /**
-     * Model eskalasi zona abu-abu yang efektif: Nemotron selama
-     * kuota free OpenRouter belum menyentuh rem, Qwen berbayar
-     * sesudahnya.
+     * Model eskalasi zona abu-abu yang efektif. Rem kuota hanya
+     * berlaku bila model eskalasinya sendiri free OpenRouter:
+     * eskalasi DeepSeek di Token Harbor (sejak 2026-11-20) tidak
+     * memakan kuota itu, jadi rem tidak memindahkannya.
+     * Kegagalan model eskalasi (error, key belum dipasang)
+     * ditangani di escalate() dengan jatuh ke model cadangan.
      */
     public static function effectiveEscalationModel(array $cfg, bool $capReached): string
     {
-        return $capReached
-            ? (string) ($cfg['escalation_fallback_model'] ?? $cfg['escalation_model'])
-            : (string) $cfg['escalation_model'];
+        $model = (string) $cfg['escalation_model'];
+        $free = $cfg['openrouter_free_models'] ?? [];
+        if ($capReached && in_array($model, $free, true)) {
+            return (string) ($cfg['escalation_fallback_model'] ?? $model);
+        }
+        return $model;
     }
 
     // Kata penanda untuk deteksi ringan bahasa konten.
@@ -445,44 +451,68 @@ class AiModerationService
         return (string) ($setModels[0] ?? '');
     }
 
-    /** Penilaian ulang zona abu-abu langsung ke model eskalasi. */
+    /**
+     * Penilaian ulang zona abu-abu langsung ke model eskalasi.
+     * Aturan routing keras (2026-11-20): error dari model
+     * eskalasi tidak pernah menjadi putusan. Bila model eskalasi
+     * gagal (termasuk lapisan Token Harbor yang menolak konten
+     * seksual eksplisit dengan HTTP 400 atau memotong respons),
+     * penilaian diteruskan ke model eskalasi cadangan. Null
+     * hanya bila keduanya gagal; flag tetap untuk manusia.
+     */
     private static function escalate(array $cfg, string $type, string $targetId, ?string $gatedText, ?string $reasonLang = null): ?array
     {
-        try {
-            $model = self::effectiveEscalationModel(
-                $cfg,
-                self::openRouterFreeVerdictsToday($cfg) >= (int) $cfg['free_daily_soft_cap']
-            );
-            $sets = [];
-            $usage = [];
-            foreach (self::imageUrls($type, $targetId, $cfg) as $url) {
-                $bytes = self::fetchImageBytes($url);
-                if ($bytes === null) {
-                    continue;
+        $capReached = self::openRouterFreeVerdictsToday($cfg) >= (int) $cfg['free_daily_soft_cap'];
+        $candidates = [self::effectiveEscalationModel($cfg, $capReached)];
+        $fallback = (string) ($cfg['escalation_fallback_model'] ?? '');
+        if ($fallback !== '' && !in_array($fallback, $candidates, true)) {
+            $candidates[] = $fallback;
+        }
+        foreach ($candidates as $model) {
+            try {
+                $result = self::judgeAllWithModel($cfg, $model, $type, $targetId, $gatedText, $reasonLang);
+                if ($result !== null) {
+                    return $result;
                 }
-                $result = OpenRouterClient::judge($cfg, $model, $bytes, null, $reasonLang);
-                $sets[] = $result['scores'];
-                $usage[] = $result['usage'];
+            } catch (Throwable $e) {
+                error_log("[AiModeration] eskalasi via $model gagal: " . $e->getMessage());
             }
-            if ($gatedText !== null && $gatedText !== '') {
-                $result = OpenRouterClient::judge($cfg, $model, null, $gatedText, $reasonLang);
-                $sets[] = $result['scores'];
-                $usage[] = $result['usage'];
+        }
+        return null;
+    }
+
+    /** Nilai semua sumber (gambar + teks) dengan satu model. */
+    private static function judgeAllWithModel(array $cfg, string $model, string $type, string $targetId, ?string $gatedText, ?string $reasonLang): ?array
+    {
+        $sets = [];
+        $usage = [];
+        foreach (self::imageUrls($type, $targetId, $cfg) as $url) {
+            $bytes = self::fetchImageBytes($url);
+            if ($bytes === null) {
+                continue;
             }
-            if ($sets === []) {
-                return null;
-            }
-            return ['scores' => self::mergeScores(...$sets), 'model' => $model, 'usage' => $usage];
-        } catch (Throwable $e) {
-            error_log('[AiModeration] eskalasi gagal: ' . $e->getMessage());
+            $result = OpenRouterClient::judge($cfg, $model, $bytes, null, $reasonLang);
+            $sets[] = $result['scores'];
+            $usage[] = $result['usage'];
+        }
+        if ($gatedText !== null && $gatedText !== '') {
+            $result = OpenRouterClient::judge($cfg, $model, null, $gatedText, $reasonLang);
+            $sets[] = $result['scores'];
+            $usage[] = $result['usage'];
+        }
+        if ($sets === []) {
             return null;
         }
+        return ['scores' => self::mergeScores(...$sets), 'model' => $model, 'usage' => $usage];
     }
 
     /**
      * Nilai satu sumber lewat rantai model. Rantai efektif dari
      * chainFor(): primary xKiro selalu pertama; model free
      * OpenRouter ikut hanya selama rem kuotanya belum tercapai.
+     * Model yang key providernya belum dipasang dilewati lewat
+     * exception dari klien, jadi rantai tetap utuh sebelum
+     * TOKENHARBOR_API_KEY dipasang.
      */
     private static function judgeWithChain(array $cfg, ?string $imageBytes, ?string $text, ?string $reasonLang = null): array
     {
@@ -507,7 +537,7 @@ class AiModerationService
 
     /**
      * Perkiraan pemakaian kuota free OpenRouter hari ini: verdict
-     * yang diputuskan model free OpenRouter (eskalasi Nemotron dan
+     * yang diputuskan model free OpenRouter (Nemotron dan
      * cadangan Ling). Bukan penghitung panggilan mentah, tapi cukup
      * untuk rem kuota pada volume saat ini.
      */
