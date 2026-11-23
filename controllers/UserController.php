@@ -74,10 +74,12 @@ class UserController
 
     /**
      * GET /api/users/:id/activity: per-day collaboration activity for
-     * the profile heatmap. Counts posts, visible comments, projects
-     * created and projects joined (other people's) over the last
-     * 365 days, merged into one date => count map plus per-source
-     * totals. Soft-deleted and AI-removed content never counts.
+     * the profile heatmap. Counts ONLY projects created and projects
+     * joined (other people's) over the last 365 days, merged into
+     * one date => count map plus per-source totals (perintah user
+     * 2026-11-20: heatmap Collaboration Activity hanya menghitung
+     * aktivitas kolaborasi; postingan dan komentar tidak dihitung).
+     * Soft-deleted content never counts.
      */
     /** "https://www.github.com/user/" -> "github.com/user" for rail labels. */
     private static function compactUrl(string $url): string
@@ -109,13 +111,11 @@ class UserController
             $since = date('Y-m-d', strtotime('-364 days'));
             $pdo = getDB();
             $sources = [
-                'posts' => "SELECT DATE(created_at) AS d, COUNT(*) AS c FROM public_posts WHERE user_id = :uid AND deleted_at IS NULL AND created_at >= :since GROUP BY DATE(created_at)",
-                'comments' => "SELECT DATE(created_at) AS d, COUNT(*) AS c FROM comments WHERE user_id = :uid AND deleted_at IS NULL AND moderation_state = 'visible' AND created_at >= :since GROUP BY DATE(created_at)",
                 'projectsCreated' => "SELECT DATE(created_at) AS d, COUNT(*) AS c FROM collaborations WHERE user_id = :uid AND deleted_at IS NULL AND created_at >= :since GROUP BY DATE(created_at)",
                 'projectsJoined' => "SELECT DATE(uc.created_at) AS d, COUNT(*) AS c FROM user_collaboration uc JOIN collaborations c ON c.id = uc.collaboration_id WHERE uc.user_id = :uid AND c.user_id <> :uidOther AND c.deleted_at IS NULL AND uc.created_at >= :since GROUP BY DATE(uc.created_at)",
             ];
             $days = [];
-            $totals = ['posts' => 0, 'comments' => 0, 'projectsCreated' => 0, 'projectsJoined' => 0];
+            $totals = ['projectsCreated' => 0, 'projectsJoined' => 0];
             foreach ($sources as $key => $sql) {
                 $stmt = $pdo->prepare($sql);
                 $stmt->bindValue(':uid', $id);
