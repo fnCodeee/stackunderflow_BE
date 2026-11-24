@@ -878,9 +878,21 @@ class CircleController
     }
 
     /**
+     * Nama tampilan seseorang: full_name profil bila terisi,
+     * kalau tidak username (yang tidak bisa diubah).
+     *
+     * @param  array<string, mixed> $row Baris dengan username + full_name
+     */
+    private static function displayName(array $row): string
+    {
+        $name = trim((string) ($row['full_name'] ?? ''));
+        return $name !== '' ? $name : (string) ($row['username'] ?? '');
+    }
+
+    /**
      * Bentuk pesan zone untuk frontend + payload realtime.
      *
-     * @param  array<string, mixed> $row Baris zone_messages + username + photo_profile_url
+     * @param  array<string, mixed> $row Baris zone_messages + username + full_name + photo_profile_url
      * @return array<string, mixed>
      */
     private static function presentMessage(array $row, ?array $replyRow = null, ?string $ownerId = null, array $attachments = []): array
@@ -889,7 +901,7 @@ class CircleController
             'id' => $row['id'],
             'zoneId' => $row['zone_id'],
             'authorId' => $row['user_id'],
-            'authorName' => $row['username'] ?? '',
+            'authorName' => self::displayName($row),
             'authorAvatarUrl' => $row['photo_profile_url'] ?? null,
             'content' => $row['message'],
             'createdAt' => $row['timestamp'],
@@ -898,7 +910,7 @@ class CircleController
             'replyTo' => $replyRow !== null ? [
                 'id' => $replyRow['id'],
                 'authorId' => $replyRow['user_id'],
-                'authorName' => $replyRow['username'] ?? '',
+                'authorName' => self::displayName($replyRow),
                 'authorAvatarUrl' => $replyRow['photo_profile_url'] ?? null,
                 'content' => $replyRow['message'],
             ] : null,
@@ -973,7 +985,7 @@ class CircleController
         $members = array_map(
             static fn (array $m): array => [
                 'userId' => $m['id'],
-                'name' => $m['username'] ?? '',
+                'name' => self::displayName($m),
                 'avatarUrl' => $m['photo_profile_url'] ?? null,
                 'isOwner' => ($m['id'] ?? null) === $ownerId,
             ],

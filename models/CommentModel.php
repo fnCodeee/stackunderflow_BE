@@ -50,6 +50,7 @@ class CommentModel
                 '_id'               => $userId,
                 'id'                => $userId,
                 'username'          => '',
+                'full_name'         => '',
                 'photo_profile_url' => ProfileModel::DEFAULT_PHOTO_URL,
             ],
             'postId'     => $postId,
@@ -80,6 +81,7 @@ class CommentModel
                 c.created_at,
                 c.updated_at,
                 u.username,
+                pr.full_name,
                 pr.photo_profile_url
             FROM comments c
             LEFT JOIN users u ON c.user_id = u.id
@@ -104,11 +106,13 @@ class CommentModel
                 '_id'               => $row['user_id'],
                 'id'                => $row['user_id'],
                 'username'          => $row['username'] ?? '',
+                'full_name'         => $row['full_name'] ?? '',
                 'photo_profile_url' => $photoUrl,
             ],
             'user'       => [
                 'id'                => $row['user_id'],
                 'username'          => $row['username'] ?? '',
+                'full_name'         => $row['full_name'] ?? '',
                 'photo_profile_url' => $photoUrl,
             ],
             'postId'     => $row['post_id'],
@@ -154,6 +158,7 @@ class CommentModel
                 c.created_at,
                 c.updated_at,
                 u.username,
+                pr.full_name,
                 pr.photo_profile_url,
                 (SELECT COUNT(*) FROM comment_likes cl WHERE cl.comment_id = c.id) AS like_count,
                 (SELECT 1 FROM comment_likes cl2 WHERE cl2.comment_id = c.id AND cl2.user_id = ? LIMIT 1) AS is_liked
@@ -177,11 +182,13 @@ class CommentModel
                     '_id'               => $row['user_id'],
                     'id'                => $row['user_id'],
                     'username'          => $row['username'] ?? '',
+                'full_name'         => $row['full_name'] ?? '',
                     'photo_profile_url' => $photoUrl,
                 ],
                 'user'       => [
                     'id'                => $row['user_id'],
                     'username'          => $row['username'] ?? '',
+                'full_name'         => $row['full_name'] ?? '',
                     'photo_profile_url' => $photoUrl,
                 ],
                 'postId'     => $row['post_id'],

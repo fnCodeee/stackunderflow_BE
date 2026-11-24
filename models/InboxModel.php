@@ -365,6 +365,7 @@ class InboxModel
                 c.updated_at,
                 ou.id AS other_id,
                 ou.username AS other_username,
+                opr.full_name AS other_name,
                 opr.photo_profile_url AS other_photo,
                 p.is_muted,
                 p.is_pinned,
@@ -440,6 +441,7 @@ class InboxModel
                 'other' => [
                     'id' => $row['other_id'],
                     'username' => $row['other_username'] ?? '',
+                    'full_name' => $row['other_name'] ?? '',
                     'photo_profile_url' => $row['other_photo'] ?? ProfileModel::DEFAULT_PHOTO_URL,
                 ],
                 'last_message' => $row['last_body'] === null ? null : [

@@ -138,6 +138,7 @@ class PostModel
                 p.created_at,
                 p.updated_at,
                 u.username,
+                pr.full_name,
                 pr.photo_profile_url
             FROM public_posts p
             LEFT JOIN users u ON p.user_id = u.id
@@ -196,6 +197,7 @@ class PostModel
                 c.created_at,
                 c.updated_at,
                 u.username,
+                pr.full_name,
                 pr.photo_profile_url
             FROM comments c
             LEFT JOIN users u ON c.user_id = u.id
@@ -219,6 +221,7 @@ class PostModel
                 'user' => [
                     'id' => $c['user_id'],
                     'username' => $c['username'] ?? '',
+                    'full_name' => $c['full_name'] ?? '',
                     'photo_profile_url' => $c['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
                 ],
             ];
@@ -242,6 +245,7 @@ class PostModel
             'owner' => [
                 'id' => $post['user_id'],
                 'username' => $post['username'] ?? '',
+                'full_name' => $post['full_name'] ?? '',
                 'photo_profile_url' => $post['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
             ],
             'comments' => $commentsWithProfile,
@@ -410,6 +414,7 @@ class PostModel
                 p.created_at,
                 p.updated_at,
                 u.username,
+                pr.full_name,
                 pr.photo_profile_url
             FROM public_posts p
             LEFT JOIN users u ON p.user_id = u.id
@@ -500,6 +505,7 @@ class PostModel
                 'user_id'          => [
                     'id'                => $p['user_id'],
                     'username'          => $p['username'] ?? '',
+                    'full_name'         => $p['full_name'] ?? '',
                     'photo_profile_url' => $p['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
                 ],
                 'description'      => $p['description'],

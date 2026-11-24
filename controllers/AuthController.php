@@ -316,6 +316,7 @@ class AuthController
             $responseData = [
                 'id'       => $user['id'],
                 'username' => $user['username'],
+                'full_name' => ProfileModel::findByUserId((string) $user['id'])['full_name'] ?? '',
                 'role'     => $user['role'] ?? 'user',
                 'token'    => $token,
                 'email'    => $user['email'] ?? $email,
@@ -423,6 +424,7 @@ class AuthController
             $responseData = [
                 'id'       => $user['id'],
                 'username' => $user['username'],
+                'full_name' => ProfileModel::findByUserId((string) $user['id'])['full_name'] ?? '',
                 'role'     => $user['role'] ?? 'user',
                 'token'    => $token,
             ];

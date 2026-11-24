@@ -67,7 +67,7 @@ class ZoneMessageModel
     {
         $db = $pdo ?? getDB();
         $stmt = $db->prepare(
-            "SELECT zm.*, u.username, pr.photo_profile_url
+            "SELECT zm.*, u.username, pr.full_name, pr.photo_profile_url
              FROM zone_messages zm
              JOIN users u ON u.id = zm.user_id
              LEFT JOIN profiles pr ON pr.user_id = u.id
@@ -95,7 +95,7 @@ class ZoneMessageModel
         $db = $pdo ?? getDB();
         $placeholders = implode(',', array_fill(0, count($ids), '?'));
         $stmt = $db->prepare(
-            "SELECT zm.*, u.username, pr.photo_profile_url
+            "SELECT zm.*, u.username, pr.full_name, pr.photo_profile_url
              FROM zone_messages zm
              JOIN users u ON u.id = zm.user_id
              LEFT JOIN profiles pr ON pr.user_id = u.id
@@ -164,7 +164,7 @@ class ZoneMessageModel
     {
         $db = $pdo ?? getDB();
 
-        $sql = "SELECT zm.*, u.username, pr.photo_profile_url
+        $sql = "SELECT zm.*, u.username, pr.full_name, pr.photo_profile_url
                 FROM zone_messages zm
                 JOIN users u ON u.id = zm.user_id
                 LEFT JOIN profiles pr ON pr.user_id = u.id

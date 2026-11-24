@@ -308,6 +308,7 @@ class CollabModel
             c.status,
             c.created_at,
             u.username,
+            pr.full_name,
             pr.photo_profile_url
         FROM collaborations c
         LEFT JOIN users u
@@ -417,6 +418,7 @@ class CollabModel
                 'owner' => [
                     'id' => $collab['user_id'],
                     'username' => $collab['username'] ?? '',
+                    'full_name' => $collab['full_name'] ?? '',
                     'photo_profile_url' =>
                         $collab['photo_profile_url']
                         ?? ProfileModel::DEFAULT_PHOTO_URL,
@@ -485,6 +487,7 @@ class CollabModel
                 c.status,
                 c.created_at,
                 u.username,
+                pr.full_name,
                 pr.photo_profile_url
             FROM collaborations c
             LEFT JOIN users u
@@ -542,6 +545,7 @@ class CollabModel
                     ELSE 'not-started'
                 END AS my_status,
                 u.username,
+                pr.full_name,
                 pr.photo_profile_url
             FROM collaborations c
             LEFT JOIN user_collaboration uc
@@ -615,7 +619,7 @@ class CollabModel
         // detail) — satu query untuk semua collab, dikelompokkan per
         // collaboration_id, urut waktu gabung.
         $memberListStmt = $pdo->prepare("
-            SELECT uc.collaboration_id, u.id, u.username, pr.photo_profile_url, uc.status AS work_status
+            SELECT uc.collaboration_id, u.id, u.username, pr.full_name, pr.photo_profile_url, uc.status AS work_status
             FROM user_collaboration uc
             JOIN users u ON u.id = uc.user_id
             LEFT JOIN profiles pr ON pr.user_id = u.id
@@ -628,6 +632,7 @@ class CollabModel
             $membersMap[$row['collaboration_id']][] = [
                 'id' => $row['id'],
                 'username' => $row['username'] ?? '',
+                'full_name' => $row['full_name'] ?? '',
                 'work_status' => $row['work_status'] ?? 'not-started',
                 'photo_profile_url' => $row['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
             ];
@@ -688,6 +693,7 @@ class CollabModel
                 'owner' => [
                     'id' => $collab['user_id'],
                     'username' => $collab['username'] ?? '',
+                    'full_name' => $collab['full_name'] ?? '',
                     'photo_profile_url' =>
                         $collab['photo_profile_url']
                         ?? ProfileModel::DEFAULT_PHOTO_URL,
@@ -726,6 +732,7 @@ class CollabModel
                     ELSE 'not-started'
                 END AS my_status,
                 u.username,
+                pr.full_name,
                 pr.photo_profile_url
             FROM collaborations c
             LEFT JOIN user_collaboration uc
@@ -774,6 +781,7 @@ class CollabModel
             c.created_at,
             c.updated_at,
             u.username,
+            pr.full_name,
             pr.photo_profile_url
         FROM collaborations c
         LEFT JOIN users u
@@ -870,6 +878,7 @@ class CollabModel
             'owner' => [
                 'id' => $collab['user_id'],
                 'username' => $collab['username'] ?? '',
+                'full_name' => $collab['full_name'] ?? '',
                 'photo_profile_url' =>
                     $collab['photo_profile_url']
                     ?? ProfileModel::DEFAULT_PHOTO_URL,
@@ -891,7 +900,7 @@ class CollabModel
 
         // 1. Ambil data user & profile
         $userStmt = $pdo->prepare("
-            SELECT u.id, u.username, pr.photo_profile_url 
+            SELECT u.id, u.username, pr.full_name, pr.photo_profile_url 
             FROM users u
             LEFT JOIN profiles pr ON u.id = pr.user_id
             WHERE u.id = :user_id
@@ -1011,12 +1020,14 @@ class CollabModel
                     'id' => $user['id'],
                     '_id' => $user['id'],
                     'username' => $user['username'],
+                    'full_name' => $user['full_name'] ?? '',
                     'photo_profile_url' => $photoProfile,
                 ],
                 'user_id' => [
                     'id' => $user['id'],
                     '_id' => $user['id'],
                     'username' => $user['username'],
+                    'full_name' => $user['full_name'] ?? '',
                     'photo_profile_url' => $photoProfile,
                 ],
                 'title' => $c['title'],
@@ -1088,13 +1099,13 @@ class CollabModel
      *
      * @param  string   $collabId UUID collaboration
      * @param  PDO|null $pdo      Koneksi (dipakai saat di dalam transaksi)
-     * @return array<int, array{id: string, username: string, photo_profile_url: string}>
+     * @return array<int, array{id: string, username: string, full_name: string, photo_profile_url: string}>
      */
     public static function acceptedMembers(string $collabId, ?PDO $pdo = null): array
     {
         $pdo ??= getDB();
         $stmt = $pdo->prepare("
-            SELECT u.id, u.username, pr.photo_profile_url
+            SELECT u.id, u.username, pr.full_name, pr.photo_profile_url
             FROM user_collaboration uc
             JOIN users u ON u.id = uc.user_id
             LEFT JOIN profiles pr ON pr.user_id = u.id
@@ -1107,6 +1118,7 @@ class CollabModel
             $members[] = [
                 'id' => $row['id'],
                 'username' => $row['username'] ?? '',
+                'full_name' => $row['full_name'] ?? '',
                 'photo_profile_url' => $row['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
             ];
         }
@@ -1377,7 +1389,7 @@ class CollabModel
     {
         $pdo = getDB();
         $stmt = $pdo->prepare(
-            "SELECT ca.id, ca.user_id, u.username, pr.photo_profile_url, ca.message, ca.status, ca.created_at
+            "SELECT ca.id, ca.user_id, u.username, pr.full_name, pr.photo_profile_url, ca.message, ca.status, ca.created_at
              FROM collaboration_applications ca
              JOIN users u ON u.id = ca.user_id
              LEFT JOIN profiles pr ON pr.user_id = ca.user_id
@@ -1393,6 +1405,7 @@ class CollabModel
                 'id' => $row['id'],
                 'user_id' => $row['user_id'],
                 'username' => $row['username'] ?? '',
+                'full_name' => $row['full_name'] ?? '',
                 'photo_profile_url' => $row['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
                 'message' => $row['message'],
                 'status' => self::mapApplicationStatus((string) $row['status']),

@@ -345,6 +345,7 @@ class NotificationModel
             'actor' => [
                 'id' => $row['actor_id'],
                 'username' => $row['actor_username'] ?? null,
+                'full_name' => $row['actor_name'] ?? null,
                 'photo' => $row['actor_photo'] ?? null,
             ],
             'postId' => $postId,
@@ -413,6 +414,7 @@ class NotificationModel
                 n.id, n.type, n.title, n.is_read, n.created_at,
                 n.actor_id, n.target_id,
                 a.username AS actor_username,
+                pr.full_name AS actor_name,
                 pr.photo_profile_url AS actor_photo,
                 CASE WHEN n.type = 'like' THEN n.target_id ELSE c.post_id END AS post_id
             FROM notifications n
@@ -474,6 +476,7 @@ class NotificationModel
                 n.id, n.type, n.title, n.is_read, n.created_at,
                 n.actor_id, n.target_id,
                 a.username AS actor_username,
+                pr.full_name AS actor_name,
                 pr.photo_profile_url AS actor_photo,
                 CASE WHEN n.type = 'like' THEN n.target_id ELSE c.post_id END AS post_id
             FROM notifications n
