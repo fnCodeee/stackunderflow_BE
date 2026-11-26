@@ -75,14 +75,14 @@ class PlannerModel
             FROM (
                 SELECT :owner AS uid, 0 AS ord
                 UNION ALL
-                SELECT user_id AS uid, 1 AS ord FROM user_collaboration WHERE collaboration_id = :cid
+                SELECT user_id AS uid, 1 AS ord FROM user_collaboration WHERE collaboration_id = :cid AND user_id != :owner2
             ) m
             JOIN users u ON u.id = m.uid
             LEFT JOIN profiles pr ON pr.user_id = u.id
             LEFT JOIN collab_planner_job_roles jr ON jr.collab_id = :cid2 AND jr.user_id = u.id
             ORDER BY m.ord ASC, u.username ASC
         ");
-        $stmt->execute([':owner' => $ownerId, ':cid' => $collabId, ':cid2' => $collabId]);
+        $stmt->execute([':owner' => $ownerId, ':cid' => $collabId, ':cid2' => $collabId, ':owner2' => $ownerId]);
         return $stmt->fetchAll();
     }
 

@@ -139,6 +139,15 @@ try {
         }
     }
     check('members() membawa job_role', $memberRow !== null && ($memberRow['job_role'] ?? null) === 'Backend');
+    // Owner juga anggota user_collaboration; members() tidak boleh
+    // mengembalikannya dua kali (dulu UNION ALL menduplikasi).
+    $ownerCount = 0;
+    foreach ($members as $m) {
+        if ((string) $m['id'] === $ownerId) {
+            $ownerCount++;
+        }
+    }
+    check('members() owner hanya sekali', $ownerCount === 1);
     PlannerModel::setJobRole($collabId, $memberId, '');
     check('job role bisa dihapus', (PlannerModel::jobRolesMap($collabId)[$memberId] ?? null) === null);
 
