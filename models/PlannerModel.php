@@ -71,7 +71,7 @@ class PlannerModel
     {
         $db = getDB();
         $stmt = $db->prepare("
-            SELECT u.id, u.username, pr.full_name, pr.photo_profile_url, m.ord
+            SELECT u.id, u.username, pr.full_name, pr.photo_profile_url, m.ord, jr.job_role
             FROM (
                 SELECT :owner AS uid, 0 AS ord
                 UNION ALL
@@ -79,9 +79,10 @@ class PlannerModel
             ) m
             JOIN users u ON u.id = m.uid
             LEFT JOIN profiles pr ON pr.user_id = u.id
+            LEFT JOIN collab_planner_job_roles jr ON jr.collab_id = :cid2 AND jr.user_id = u.id
             ORDER BY m.ord ASC, u.username ASC
         ");
-        $stmt->execute([':owner' => $ownerId, ':cid' => $collabId]);
+        $stmt->execute([':owner' => $ownerId, ':cid' => $collabId, ':cid2' => $collabId]);
         return $stmt->fetchAll();
     }
 
@@ -113,6 +114,36 @@ class PlannerModel
             ON DUPLICATE KEY UPDATE role = VALUES(role)
         ");
         $stmt->execute([':cid' => $collabId, ':uid' => $userId, ':role' => $role]);
+    }
+
+    /** @return array<string, string> user_id => job_role */
+    public static function jobRolesMap(string $collabId): array
+    {
+        $db = getDB();
+        $stmt = $db->prepare("SELECT user_id, job_role FROM collab_planner_job_roles WHERE collab_id = :cid");
+        $stmt->execute([':cid' => $collabId]);
+        $map = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $map[(string) $row['user_id']] = (string) $row['job_role'];
+        }
+        return $map;
+    }
+
+    /** $jobRole null atau '' menghapus job role anggota itu. */
+    public static function setJobRole(string $collabId, string $userId, ?string $jobRole): void
+    {
+        $db = getDB();
+        if ($jobRole === null || trim($jobRole) === '') {
+            $stmt = $db->prepare("DELETE FROM collab_planner_job_roles WHERE collab_id = :cid AND user_id = :uid");
+            $stmt->execute([':cid' => $collabId, ':uid' => $userId]);
+            return;
+        }
+        $stmt = $db->prepare("
+            INSERT INTO collab_planner_job_roles (collab_id, user_id, job_role, timestamp)
+            VALUES (:cid, :uid, :role, NOW())
+            ON DUPLICATE KEY UPDATE job_role = VALUES(job_role), timestamp = NOW()
+        ");
+        $stmt->execute([':cid' => $collabId, ':uid' => $userId, ':role' => trim($jobRole)]);
     }
 
     // ── Sections ──────────────────────────────────────────────────────
@@ -209,15 +240,16 @@ class PlannerModel
 
     /**
      * @param array{collab_id: string, section_id: ?string, title: string, assignee_id: ?string,
-     *              created_by: string, due_date: ?string, follows_task_id: ?string, gap_days: ?int} $data
+     *              created_by: string, due_date: ?string, start_date: ?string, icon: ?string,
+     *              blocks_json: ?string, pencilled: int, follows_task_id: ?string, gap_days: ?int} $data
      */
     public static function createTask(array $data): array
     {
         $db = getDB();
         $id = self::uuid();
         $stmt = $db->prepare("
-            INSERT INTO collab_tasks (id, collab_id, section_id, title, assignee_id, created_by, due_date, follows_task_id, gap_days, position, timestamp)
-            VALUES (:id, :cid, :sid, :title, :assignee, :creator, :due, :follows, :gap, 0, NOW())
+            INSERT INTO collab_tasks (id, collab_id, section_id, title, assignee_id, created_by, due_date, start_date, icon, blocks_json, pencilled, follows_task_id, gap_days, position, timestamp)
+            VALUES (:id, :cid, :sid, :title, :assignee, :creator, :due, :start, :icon, :blocks, :pencilled, :follows, :gap, 0, NOW())
         ");
         $stmt->execute([
             ':id' => $id,
@@ -227,6 +259,10 @@ class PlannerModel
             ':assignee' => $data['assignee_id'],
             ':creator' => $data['created_by'],
             ':due' => $data['due_date'],
+            ':start' => $data['start_date'] ?? null,
+            ':icon' => $data['icon'] ?? null,
+            ':blocks' => $data['blocks_json'] ?? null,
+            ':pencilled' => $data['pencilled'] ?? 0,
             ':follows' => $data['follows_task_id'],
             ':gap' => $data['gap_days'],
         ]);
@@ -239,7 +275,7 @@ class PlannerModel
         if ($fields === []) {
             return;
         }
-        $allowed = ['title', 'section_id', 'assignee_id', 'follows_task_id', 'gap_days', 'done_at', 'done_by'];
+        $allowed = ['title', 'section_id', 'assignee_id', 'follows_task_id', 'gap_days', 'done_at', 'done_by', 'start_date', 'icon', 'blocks_json', 'pencilled'];
         $sets = [];
         $params = [':id' => $taskId];
         foreach ($fields as $key => $value) {
@@ -263,6 +299,13 @@ class PlannerModel
         $db = getDB();
         $stmt = $db->prepare("UPDATE collab_tasks SET due_date = :due, updated_at = NOW() WHERE id = :id");
         $stmt->execute([':due' => $dueDate, ':id' => $taskId]);
+    }
+
+    public static function setStartDate(string $taskId, ?string $startDate): void
+    {
+        $db = getDB();
+        $stmt = $db->prepare("UPDATE collab_tasks SET start_date = :start, updated_at = NOW() WHERE id = :id");
+        $stmt->execute([':start' => $startDate, ':id' => $taskId]);
     }
 
     public static function setGapDays(string $taskId, ?int $gapDays): void
@@ -322,8 +365,8 @@ class PlannerModel
             $fid = (string) $follower['id'];
             if (($follower['due_date'] ?? null) !== null) {
                 $db = getDB();
-                $stmt = $db->prepare("UPDATE collab_tasks SET due_date = DATE_ADD(due_date, INTERVAL :delta DAY), updated_at = NOW() WHERE id = :id");
-                $stmt->execute([':delta' => $delta, ':id' => $fid]);
+                $stmt = $db->prepare("UPDATE collab_tasks SET due_date = DATE_ADD(due_date, INTERVAL :delta DAY), start_date = DATE_ADD(start_date, INTERVAL :delta2 DAY), updated_at = NOW() WHERE id = :id");
+                $stmt->execute([':delta' => $delta, ':delta2' => $delta, ':id' => $fid]);
                 $shifted[] = $fid;
             }
             $shifted = array_merge($shifted, self::shiftWithFollowers($fid, $delta, $visited));
@@ -383,6 +426,31 @@ class PlannerModel
             ORDER BY (t.done_at IS NOT NULL) ASC, t.due_date IS NULL ASC, t.due_date ASC, t.timestamp ASC
         ");
         $stmt->execute([':uid' => $userId]);
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * Collab yang user ikuti (owner atau accepted member) dengan
+     * planner aktif, beserta jumlah task terbukanya. Menggerakkan
+     * submenu Tasks di sidebar untuk team board.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public static function myPlanners(string $userId): array
+    {
+        $db = getDB();
+        $stmt = $db->prepare("
+            SELECT c.id, c.title,
+                   (SELECT COUNT(*) FROM collab_tasks t
+                     WHERE t.collab_id = c.id AND t.deleted_at IS NULL AND t.done_at IS NULL) AS open_count
+            FROM collaborations c
+            WHERE c.planner_enabled = 1 AND c.deleted_at IS NULL
+              AND (c.user_id = :uid
+                   OR EXISTS (SELECT 1 FROM user_collaboration uc
+                              WHERE uc.collaboration_id = c.id AND uc.user_id = :uid2))
+            ORDER BY c.title ASC
+        ");
+        $stmt->execute([':uid' => $userId, ':uid2' => $userId]);
         return $stmt->fetchAll();
     }
 }

@@ -225,6 +225,7 @@ $router->get('/api/collab/:id/planner', [AuthMiddleware::class, 'handle'], [Plan
 $router->post('/api/collab/:id/planner/enable', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'enable']);
 $router->post('/api/collab/:id/planner/disable', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'disable']);
 $router->put('/api/collab/:id/planner/roles', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'setRole']);
+$router->put('/api/collab/:id/planner/job-roles', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'setJobRole']);
 $router->post('/api/collab/:id/planner/sections', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'createSection']);
 $router->put('/api/collab/:id/planner/sections/:sectionId', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'updateSection']);
 $router->delete('/api/collab/:id/planner/sections/:sectionId', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'deleteSection']);
@@ -232,6 +233,7 @@ $router->post('/api/collab/:id/planner/tasks', [AuthMiddleware::class, 'handle']
 $router->put('/api/collab/:id/planner/tasks/:taskId', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'updateTask']);
 $router->delete('/api/collab/:id/planner/tasks/:taskId', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'deleteTask']);
 $router->get('/api/me/tasks', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'myTasks']);
+$router->get('/api/me/planners', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'myPlanners']);
 
 // ── SKILLS MODULE ─────────────────────────────────────────────────────────────
 // GET /api/skills: skill system + private skill milik user yang sedang login

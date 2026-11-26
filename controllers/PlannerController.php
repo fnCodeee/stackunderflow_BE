@@ -212,6 +212,16 @@ class PlannerController
             self::requireMember($access, $assigneeId);
 
             $dueDate = self::validDueDate($body['dueDate'] ?? null);
+            $startDate = self::validDueDate($body['startDate'] ?? null);
+            if ($startDate !== null && $dueDate === null) {
+                Response::json(null, 400, 'startDate needs a dueDate', false);
+            }
+            if ($startDate !== null && $dueDate !== null && $startDate > $dueDate) {
+                Response::json(null, 400, 'startDate must not be after dueDate', false);
+            }
+            $icon = self::validIcon($body['icon'] ?? null);
+            $blocksJson = self::validBlocks($body['blocks'] ?? null);
+            $pencilled = !empty($body['pencilled']);
 
             $followsId = self::nullableId($body['followsTaskId'] ?? null);
             $gap = null;
@@ -230,6 +240,10 @@ class PlannerController
                 'assignee_id' => $assigneeId,
                 'created_by' => $userId,
                 'due_date' => $dueDate,
+                'start_date' => $startDate,
+                'icon' => $icon,
+                'blocks_json' => $blocksJson,
+                'pencilled' => $pencilled ? 1 : 0,
                 'follows_task_id' => $followsId,
                 'gap_days' => $gap,
             ]);
@@ -294,6 +308,27 @@ class PlannerController
                 $fields['assignee_id'] = $assigneeId;
             }
 
+            if (array_key_exists('icon', $body)) {
+                if (!$isCreator && !$access['isOwner']) {
+                    Response::json(null, 403, 'Only the task creator or the owner can change this task', false);
+                }
+                $fields['icon'] = self::validIcon($body['icon']);
+            }
+
+            if (array_key_exists('blocks', $body)) {
+                if (!$isCreator && !$access['isOwner']) {
+                    Response::json(null, 403, 'Only the task creator or the owner can change this task', false);
+                }
+                $fields['blocks_json'] = self::validBlocks($body['blocks']);
+            }
+
+            if (array_key_exists('pencilled', $body)) {
+                if (!$canMove) {
+                    Response::json(null, 403, 'Only the assignee, the owner, or a PM can change this task', false);
+                }
+                $fields['pencilled'] = !empty($body['pencilled']) ? 1 : 0;
+            }
+
             if (array_key_exists('done', $body)) {
                 if (!$canMove) {
                     Response::json(null, 403, 'Only the assignee, the owner, or a PM can complete this task', false);
@@ -340,6 +375,9 @@ class PlannerController
                 $oldDue = $task['due_date'] ?? null;
                 if ($newDue !== $oldDue) {
                     PlannerModel::setDueDate($taskId, $newDue);
+                    if ($newDue === null) {
+                        PlannerModel::setStartDate($taskId, null);
+                    }
                     if ($newDue !== null && $oldDue !== null) {
                         $delta = PlannerModel::computeGap($newDue, $oldDue) ?? 0;
                         $shiftedIds = PlannerModel::shiftWithFollowers($taskId, $delta);
@@ -356,6 +394,24 @@ class PlannerController
                     }
                     $task = PlannerModel::findTask($taskId) ?? $task;
                 }
+            }
+
+            // Awal rentang (resize tepi kiri): digeser setelah dueDate
+            // supaya validasi start <= due memakai due yang baru.
+            if (array_key_exists('startDate', $body)) {
+                if (!$canMove) {
+                    Response::json(null, 403, 'Only the assignee, the owner, or a PM can reschedule this task', false);
+                }
+                $newStart = self::validDueDate($body['startDate']);
+                $effectiveDue = $task['due_date'] ?? null;
+                if ($newStart !== null && $effectiveDue === null) {
+                    Response::json(null, 400, 'startDate needs a dueDate', false);
+                }
+                if ($newStart !== null && $effectiveDue !== null && $newStart > $effectiveDue) {
+                    Response::json(null, 400, 'startDate must not be after dueDate', false);
+                }
+                PlannerModel::setStartDate($taskId, $newStart);
+                $task = PlannerModel::findTask($taskId) ?? $task;
             }
 
             // Gap task ini sendiri dihitung ulang dari leader-nya yang
@@ -396,6 +452,56 @@ class PlannerController
             PlannerModel::softDelete((string) $task['id']);
             self::publishTaskDeleted($access, (string) $task['id']);
             Response::json(['id' => (string) $task['id']], 200, 'Task deleted');
+        } catch (Throwable) {
+            Response::json(null, 500, 'Internal server error', false);
+        }
+    }
+
+    // ── PUT /api/collab/:id/planner/job-roles ──────────────────────
+    public static function setJobRole(array $params = []): void
+    {
+        try {
+            $userId = self::requireUser();
+            $access = self::resolveAccess((string) ($params['id'] ?? ''), $userId);
+            self::requireEnabled($access);
+            $collabId = (string) $access['collab']['id'];
+            $body = $GLOBALS['body'] ?? [];
+            $targetId = trim((string) ($body['userId'] ?? ''));
+            if ($targetId === '') {
+                Response::json(null, 400, 'userId is required', false);
+            }
+            self::requireMember($access, $targetId);
+            if ($targetId !== $userId && !self::canManage($access)) {
+                Response::json(null, 403, 'Only the owner or a PM can set another member job role', false);
+            }
+            $jobRole = trim((string) ($body['jobRole'] ?? ''));
+            if (mb_strlen($jobRole) > 120) {
+                Response::json(null, 400, 'Job role is too long (max 120 characters)', false);
+            }
+            if (strtolower($jobRole) === 'owner') {
+                Response::json(null, 400, '"Owner" is a board role, not a job role', false);
+            }
+            PlannerModel::setJobRole($collabId, $targetId, $jobRole === '' ? null : $jobRole);
+            Response::json(['userId' => $targetId, 'jobRole' => $jobRole === '' ? null : $jobRole], 200, 'Job role updated');
+        } catch (Throwable) {
+            Response::json(null, 500, 'Internal server error', false);
+        }
+    }
+
+    // ── GET /api/me/planners ─────────────────────────────────────────
+    public static function myPlanners(array $params = []): void
+    {
+        try {
+            $userId = self::requireUser();
+            $rows = PlannerModel::myPlanners($userId);
+            Response::json(array_map(
+                static fn (array $r): array => [
+                    'collabId' => (string) $r['id'],
+                    'title' => (string) $r['title'],
+                    'openCount' => (int) ($r['open_count'] ?? 0),
+                ],
+                $rows
+            ));
         } catch (Throwable) {
             Response::json(null, 500, 'Internal server error', false);
         }
@@ -536,6 +642,56 @@ class PlannerController
         return $value === '' ? null : $value;
     }
 
+    /** Icon Boxicons (mis. "edit", "code-alt"): huruf, angka, strip; kosong = null. */
+    private static function validIcon(mixed $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+        $value = trim((string) $value);
+        if ($value === '') {
+            return null;
+        }
+        if (mb_strlen($value) > 32 || !preg_match('/^[a-z0-9][a-z0-9\\-]*$/i', $value)) {
+            Response::json(null, 400, 'icon must be a short name (letters, digits, hyphen)', false);
+        }
+        return $value;
+    }
+
+    /** BlockBody blocks: array (atau null); dikembalikan sebagai string JSON, maks 64 KB. */
+    private static function validBlocks(mixed $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+        if (!is_array($value)) {
+            Response::json(null, 400, 'blocks must be an array', false);
+        }
+        foreach ($value as $block) {
+            if (!is_array($block) || !isset($block['type']) || !is_string($block['type'])) {
+                Response::json(null, 400, 'each block needs a type', false);
+            }
+        }
+        $json = json_encode(array_values($value));
+        if ($json === false || strlen($json) > 65536) {
+            Response::json(null, 400, 'blocks are too large (max 64 KB)', false);
+        }
+        return $json;
+    }
+
+    /** blocks_json dari DB kembali jadi array (atau null bila kosong/rusak). */
+    private static function decodeBlocks(mixed $raw): ?array
+    {
+        if ($raw === null || $raw === '') {
+            return null;
+        }
+        if (is_array($raw)) {
+            return $raw;
+        }
+        $decoded = json_decode((string) $raw, true);
+        return is_array($decoded) ? $decoded : null;
+    }
+
     /** Null bila kosong; string Y-m-d yang valid; selain itu 400. */
     private static function validDueDate(mixed $value): ?string
     {
@@ -586,6 +742,7 @@ class PlannerController
             'username' => (string) ($row['username'] ?? ''),
             'name' => $name !== '' ? $name : (string) ($row['username'] ?? ''),
             'photo' => $row['photo_profile_url'] ?? null,
+            'jobRole' => $row['job_role'] ?? null,
             'role' => $role,
         ];
     }
@@ -619,6 +776,10 @@ class PlannerController
                 'username' => (string) ($row['creator_username'] ?? ''),
             ],
             'dueDate' => $row['due_date'] ?? null,
+            'startDate' => $row['start_date'] ?? null,
+            'icon' => $row['icon'] ?? null,
+            'blocks' => self::decodeBlocks($row['blocks_json'] ?? null),
+            'pencilled' => (int) ($row['pencilled'] ?? 0) === 1,
             'follows' => ($row['follows_task_id'] ?? null) !== null ? [
                 'id' => (string) $row['follows_task_id'],
                 'title' => (string) ($row['follows_title'] ?? ''),
