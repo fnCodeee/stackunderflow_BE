@@ -15,6 +15,8 @@
 declare(strict_types=1);
 
 require_once BASE_PATH . '/models/SkillModel.php';
+require_once BASE_PATH . '/models/UserSkillModel.php';
+require_once BASE_PATH . '/utils/SkillGuard.php';
 require_once BASE_PATH . '/utils/Response.php';
 
 class SkillController
@@ -50,8 +52,13 @@ class SkillController
      * Membuat private skill untuk user yang sedang login.
      *
      * Validasi:
-     *  - skill_name: required, string, maksimal 100 karakter.
-     *  - Cegah duplikasi nama skill private milik user yang sama.
+     *  - skill_name: required, string.
+     *  - SkillGuard: format nama (2-30 karakter, charset terbatas,
+     *    tanpa alamat web / nomor telepon) + blocklist kata kasar,
+     *    18+, dan judi online (ternormalisasi anti-leetspeak).
+     *  - Maksimal 20 skill pribadi per user.
+     *  - Cegah duplikasi nama skill: tidak boleh sama (case-insensitive)
+     *    dengan skill system maupun skill private milik user sendiri.
      *  - scope & created_by ditentukan backend, bukan dari request.
      *
      * @param  array<string, string> $params Path parameters dari Router
@@ -87,15 +94,33 @@ class SkillController
 
             $skillName = trim($skillNameRaw);
 
-            if (strlen($skillName) > 100) {
-                Response::json(null, 400, 'skill_name maksimal 100 karakter', false);
+            // 2b. SkillGuard: format + blocklist ternormalisasi.
+            $guardError = SkillGuard::validateName($skillName);
+            if ($guardError !== null) {
+                Response::json(null, 400, $guardError, false);
             }
 
-            // 3. Buat skill private (model menangani pencegahan duplikasi user)
+            // 2c. Batas jumlah skill pribadi per user.
+            if (SkillModel::countPrivateForUser($userId) >= SkillGuard::MAX_PRIVATE_PER_USER) {
+                Response::json(null, 400, SkillGuard::MSG_CAP, false);
+            }
+
+            // 3. Buat skill private (model menangani pencegahan duplikasi:
+            //    nama tidak boleh menabrak skill system / milik user sendiri)
             try {
                 $skill = SkillModel::createPrivate($skillName, $userId);
             } catch (InvalidArgumentException $e) {
                 Response::json(null, 409, $e->getMessage(), false);
+            }
+
+            // 3b. Skill pribadi langsung tampil di profile pemiliknya:
+            // relasi user_skill adalah daftar skill yang di-show di
+            // profile. Kegagalan relasi tidak menggagalkan pembuatan
+            // skill, cukup dicatat di log.
+            try {
+                UserSkillModel::add($userId, (string) $skill['id']);
+            } catch (Throwable $linkError) {
+                error_log('[SKILL LINK ERROR] ' . $linkError->getMessage());
             }
 
             Response::json($skill, 200, 'Skill berhasil dibuat!', true);

@@ -18,7 +18,21 @@ require_once BASE_PATH . '/controllers/AuthController.php';
 require_once BASE_PATH . '/controllers/ProfileController.php';
 require_once BASE_PATH . '/controllers/PostController.php';
 require_once BASE_PATH . '/controllers/CollabController.php';
+require_once BASE_PATH . '/controllers/CircleController.php';
+require_once BASE_PATH . '/controllers/PlannerController.php';
 require_once BASE_PATH . '/controllers/SkillController.php';
+require_once BASE_PATH . '/controllers/SearchController.php';
+require_once BASE_PATH . '/controllers/UserController.php';
+require_once BASE_PATH . '/controllers/UploadController.php';
+require_once BASE_PATH . '/controllers/NotificationController.php';
+require_once BASE_PATH . '/controllers/InboxController.php';
+require_once BASE_PATH . '/middlewares/AdminMiddleware.php';
+require_once BASE_PATH . '/controllers/ReportController.php';
+require_once BASE_PATH . '/controllers/AdminController.php';
+require_once BASE_PATH . '/controllers/AdminModerationController.php';
+require_once BASE_PATH . '/controllers/AppealsController.php';
+require_once BASE_PATH . '/controllers/AdminAppealsController.php';
+require_once BASE_PATH . '/controllers/AdminAiModerationController.php';
 
 // ── Health Check: GET / ───────────────────────────────────────────────────────
 $router->get('/', function (array $params): void {
@@ -47,12 +61,35 @@ $router->post('/api/auth/register', [AuthController::class, 'register']);
 // Phase 2C: Login
 $router->post('/api/auth/login', [AuthController::class, 'login']);
 
+// Google sign-in (ID token dari Google Identity Services)
+$router->post('/api/auth/google', [AuthController::class, 'google']);
+
+// Reset password: minta link (publik, respons selalu generik) + eksekusi reset
+$router->post('/api/auth/forgot-password', [AuthController::class, 'forgotPassword']);
+$router->post('/api/auth/reset-password', [AuthController::class, 'resetPassword']);
+
+// Verifikasi email: eksekusi dari link email (publik) + kirim ulang (login)
+$router->post('/api/auth/verify-email', [AuthController::class, 'verifyEmail']);
+$router->post('/api/auth/resend-verification-pending', [AuthController::class, 'resendVerificationPending']);
+
+// Logout: cabut token aktif (audit P0, 2026-11-14)
+$router->post('/api/auth/logout', [AuthMiddleware::class, 'handle'], [AuthController::class, 'logout']);
+
+// Refresh: tukar token aktif dengan token baru; token lama dicabut
+$router->post('/api/auth/refresh', [AuthMiddleware::class, 'handle'], [AuthController::class, 'refresh']);
+
+// Ganti password: wajib login + password saat ini benar
+$router->put('/api/auth/change-password', [AuthMiddleware::class, 'handle'], [AuthController::class, 'changePassword']);
+
 // ── PROFILES MODULE ───────────────────────────────────────────────────────────
 // Phase 2D-1: Get My Profile
 $router->get('/api/profiles/me', [AuthMiddleware::class, 'handle'], [AuthController::class, 'me']);
 
 // Phase 2D-2: Update My Profile
 $router->put('/api/profiles/me', [AuthMiddleware::class, 'handle'], [ProfileController::class, 'updateProfile']);
+$router->get('/api/settings/notification-preferences', [AuthMiddleware::class, 'handle'], [ProfileController::class, 'getNotificationPreferences']);
+$router->put('/api/settings/notification-preferences', [AuthMiddleware::class, 'handle'], [ProfileController::class, 'updateNotificationPreferences']);
+$router->delete('/api/account', [AuthMiddleware::class, 'handle'], [ProfileController::class, 'deleteMyAccount']);
 
 // ── FEEDS / POST MODULE ───────────────────────────────────────────────────────
 // Phase 3B: Create Post
@@ -63,6 +100,9 @@ $router->get('/api/posts', [OptionalAuthMiddleware::class, 'handle'], [PostContr
 
 // Phase 3D-1: Get Post Detail (auth required — sesuai Express baseline)
 $router->get('/api/posts/:postId', [AuthMiddleware::class, 'handle'], [PostController::class, 'getPostDetail']);
+
+// Phase 3D-1b: Record View (auth required — dipanggil saat halaman detail post dibuka)
+$router->post('/api/posts/:postId/view', [AuthMiddleware::class, 'handle'], [PostController::class, 'recordView']);
 
 // Phase 3D-2: Update Post (auth required — sesuai Express baseline)
 $router->put('/api/posts/:postId', [AuthMiddleware::class, 'handle'], [PostController::class, 'updatePost']);
@@ -80,20 +120,120 @@ $router->get('/api/posts/:postId/comments', [AuthMiddleware::class, 'handle'], [
 $router->delete('/api/delete/comments/:commentId', [AuthMiddleware::class, 'handle'], [PostController::class, 'deleteComment']);
 $router->delete('/api/posts/:postId/comments/:commentId', [AuthMiddleware::class, 'handle'], [PostController::class, 'deleteComment']);
 
+// Like / Unlike Comment (auth required) — persisted like post likes.
+$router->post('/api/comments/:commentId/like', [AuthMiddleware::class, 'handle'], [PostController::class, 'likeComment']);
+$router->delete('/api/comments/:commentId/unlike', [AuthMiddleware::class, 'handle'], [PostController::class, 'unlikeComment']);
+
+// ── NOTIFICATIONS MODULE ──────────────────────────────────────────────────────
+// GET /api/notifications: daftar notifikasi milik user login (auth required)
+$router->get('/api/notifications', [AuthMiddleware::class, 'handle'], [NotificationController::class, 'listNotifications']);
+
+// GET /api/search: pencarian global TopBar (audit P2 #21)
+$router->get('/api/search', [AuthMiddleware::class, 'handle'], [SearchController::class, 'index']);
+
+// PUT /api/notifications/:id/read: tandai satu notifikasi dibaca (auth required)
+$router->put('/api/notifications/:id/read', [AuthMiddleware::class, 'handle'], [NotificationController::class, 'markRead']);
+
+// POST /api/notifications/read-all: tandai semua notifikasi dibaca (auth required)
+$router->post('/api/notifications/read-all', [AuthMiddleware::class, 'handle'], [NotificationController::class, 'markAllRead']);
+
+// ── INBOX / DM MODULE ─────────────────────────────────────────────────────────
+// Inbox persisten di atas tabel dm_* (lihat InboxController / InboxModel).
+$router->get('/api/inbox/summary', [AuthMiddleware::class, 'handle'], [InboxController::class, 'summary']);
+$router->get('/api/inbox/conversations', [AuthMiddleware::class, 'handle'], [InboxController::class, 'listConversations']);
+$router->post('/api/inbox/conversations', [AuthMiddleware::class, 'handle'], [InboxController::class, 'createConversation']);
+$router->get('/api/inbox/conversations/:id/messages', [AuthMiddleware::class, 'handle'], [InboxController::class, 'listMessages']);
+$router->post('/api/inbox/conversations/:id/messages', [AuthMiddleware::class, 'handle'], [InboxController::class, 'sendMessage']);
+$router->post('/api/inbox/conversations/:id/read', [AuthMiddleware::class, 'handle'], [InboxController::class, 'markRead']);
+$router->put('/api/inbox/conversations/:id/mute', [AuthMiddleware::class, 'handle'], [InboxController::class, 'toggleMute']);
+$router->put('/api/inbox/conversations/:id/pin', [AuthMiddleware::class, 'handle'], [InboxController::class, 'togglePin']);
+$router->put('/api/inbox/conversations/:id/archive', [AuthMiddleware::class, 'handle'], [InboxController::class, 'toggleArchive']);
+$router->post('/api/inbox/conversations/:id/mark-unread', [AuthMiddleware::class, 'handle'], [InboxController::class, 'markUnread']);
+$router->post('/api/inbox/conversations/:id/clear', [AuthMiddleware::class, 'handle'], [InboxController::class, 'clearConversation']);
+$router->post('/api/inbox/conversations/:id/restore', [AuthMiddleware::class, 'handle'], [InboxController::class, 'restoreConversation']);
+$router->delete('/api/inbox/conversations/:id', [AuthMiddleware::class, 'handle'], [InboxController::class, 'hideConversation']);
+
+// ── UPLOAD ──────────────────────────────────────────────────────────────────
+// Upload gambar ke Cloudinary (auth required) — dipakai PostModal.
+$router->post('/api/upload', [AuthMiddleware::class, 'handle'], [UploadController::class, 'uploadImage']);
+// Tanda tangan untuk upload langsung ke Cloudinary (auth required) - file tidak lewat server.
+$router->post('/api/upload/signature', [AuthMiddleware::class, 'handle'], [UploadController::class, 'signature']);
+// Tanda tangan upload lampiran Circle ke akun Cloudinary proyek (auth required).
+$router->post('/api/upload/attachment-signature', [AuthMiddleware::class, 'handle'], [UploadController::class, 'attachmentSignature']);
+
 // ── COLLABORATIONS MODULE ─────────────────────────────────────────────────────
 // Phase 4C: Create Collaboration + Auto-create Circle
 $router->post('/api/collab', [AuthMiddleware::class, 'handle'], [CollabController::class, 'createCollab']);
 
-// Phase 4D: Read Collaborations (auth required — sesuai Express baseline)
-$router->get('/api/collab', [AuthMiddleware::class, 'handle'], [CollabController::class, 'showCollab']);
-$router->get('/api/collab/:id', [AuthMiddleware::class, 'handle'], [CollabController::class, 'getCollabDetail']);
+// Phase 4D: Read Collaborations — PUBLIC (OptionalAuth) since 2026-11-10:
+// the frontend pages are server components and cannot send the
+// localStorage token; browsing collabs is public, like the feed.
+$router->get('/api/collab', [OptionalAuthMiddleware::class, 'handle'], [CollabController::class, 'showCollab']);
+$router->get('/api/collab/:id', [OptionalAuthMiddleware::class, 'handle'], [CollabController::class, 'getCollabDetail']);
 $router->get('/api/profiles/:userId/collab', [AuthMiddleware::class, 'handle'], [CollabController::class, 'yourCollabPost']);
+
+// My Collaborations board (added 2026-11-10): the current user's
+// collabs with myStatus.
+$router->get('/api/my-collaborations', [AuthMiddleware::class, 'handle'], [CollabController::class, 'getMyCollaborations']);
+$router->get('/api/my-collaborations/:id', [AuthMiddleware::class, 'handle'], [CollabController::class, 'getMyCollaborationById']);
 
 // Phase 4E: Update Collaboration (auth required — sesuai Express baseline)
 $router->put('/api/collab/:id', [AuthMiddleware::class, 'handle'], [CollabController::class, 'updateCollab']);
 
 // Phase 4F: Delete Collaboration (auth required — sesuai Express baseline)
 $router->delete('/api/collab/:id', [AuthMiddleware::class, 'handle'], [CollabController::class, 'deleteCollab']);
+
+// Batch 2: apply + membership (audit P1-3, P1-5)
+$router->post('/api/collab/:id/apply', [AuthMiddleware::class, 'handle'], [CollabController::class, 'applyToCollab']);
+$router->get('/api/collab/:id/applications', [AuthMiddleware::class, 'handle'], [CollabController::class, 'listApplications']);
+$router->put('/api/collab/:id/applications/:applicationId/accept', [AuthMiddleware::class, 'handle'], [CollabController::class, 'acceptApplication']);
+$router->put('/api/collab/:id/applications/:applicationId/decline', [AuthMiddleware::class, 'handle'], [CollabController::class, 'declineApplication']);
+$router->delete('/api/collab/:id/apply', [AuthMiddleware::class, 'handle'], [CollabController::class, 'withdrawApplication']);
+
+// Project progress (2026-11-12): owner menandai proyek complete /
+// membukanya lagi, dan mengatur status kerja tiap member
+// (user_collaboration.status yang jadi dasar kolom board).
+$router->post('/api/collab/:id/complete', [AuthMiddleware::class, 'handle'], [CollabController::class, 'completeProject']);
+$router->post('/api/collab/:id/reopen', [AuthMiddleware::class, 'handle'], [CollabController::class, 'reopenProject']);
+$router->put('/api/collab/:id/members/:userId/status', [AuthMiddleware::class, 'handle'], [CollabController::class, 'setMemberWorkStatus']);
+
+// CIRCLE MODULE (Phase 1 fondasi, keputusan 2026-11-18): Circle dibuat
+// eksplisit oleh owner (di form collab atau lewat POST di bawah ini),
+// tidak lagi otomatis. Semua endpoint butuh JWT; akses dibatasi ke
+// owner + accepted member di CircleController.
+$router->post('/api/collab/:id/circle', [AuthMiddleware::class, 'handle'], [CircleController::class, 'createForCollab']);
+$router->get('/api/circles', [AuthMiddleware::class, 'handle'], [CircleController::class, 'listCircles']);
+$router->get('/api/circles/:circleId', [AuthMiddleware::class, 'handle'], [CircleController::class, 'getCircle']);
+$router->get('/api/circles/:circleId/zones', [AuthMiddleware::class, 'handle'], [CircleController::class, 'listZones']);
+$router->get('/api/circles/:circleId/zones/:zoneId', [AuthMiddleware::class, 'handle'], [CircleController::class, 'getZone']);
+$router->post('/api/circles/:circleId/zones', [AuthMiddleware::class, 'handle'], [CircleController::class, 'createZone']);
+$router->put('/api/circles/:circleId/zones/:zoneId', [AuthMiddleware::class, 'handle'], [CircleController::class, 'updateZone']);
+$router->delete('/api/circles/:circleId/zones/:zoneId', [AuthMiddleware::class, 'handle'], [CircleController::class, 'deleteZone']);
+$router->put('/api/circles/:circleId', [AuthMiddleware::class, 'handle'], [CircleController::class, 'updateCircle']);
+$router->delete('/api/circles/:circleId', [AuthMiddleware::class, 'handle'], [CircleController::class, 'deleteCircle']);
+$router->get('/api/circles/:circleId/zones/:zoneId/messages', [AuthMiddleware::class, 'handle'], [CircleController::class, 'listMessages']);
+$router->post('/api/circles/:circleId/zones/:zoneId/messages', [AuthMiddleware::class, 'handle'], [CircleController::class, 'sendMessage']);
+$router->put('/api/circles/:circleId/zones/:zoneId/messages/:messageId', [AuthMiddleware::class, 'handle'], [CircleController::class, 'editMessage']);
+$router->delete('/api/circles/:circleId/zones/:zoneId/messages/:messageId', [AuthMiddleware::class, 'handle'], [CircleController::class, 'deleteMessage']);
+$router->post('/api/circles/:circleId/zones/:zoneId/read', [AuthMiddleware::class, 'handle'], [CircleController::class, 'markZoneRead']);
+
+// PLANNER MODULE (Tasks Fase 1, keputusan user 2026-11-23): planner
+// menempel ke collab seperti Circle tapi berdiri sendiri (tidak wajib
+// ada Circle). Owner mengaktifkan; anggota hanya bisa menggeser task
+// miliknya, owner + anggota ber-role PM boleh mengatur task siapa pun.
+$router->get('/api/collab/:id/planner', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'getPlanner']);
+$router->post('/api/collab/:id/planner/enable', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'enable']);
+$router->post('/api/collab/:id/planner/disable', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'disable']);
+$router->put('/api/collab/:id/planner/roles', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'setRole']);
+$router->put('/api/collab/:id/planner/job-roles', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'setJobRole']);
+$router->post('/api/collab/:id/planner/sections', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'createSection']);
+$router->put('/api/collab/:id/planner/sections/:sectionId', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'updateSection']);
+$router->delete('/api/collab/:id/planner/sections/:sectionId', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'deleteSection']);
+$router->post('/api/collab/:id/planner/tasks', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'createTask']);
+$router->put('/api/collab/:id/planner/tasks/:taskId', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'updateTask']);
+$router->delete('/api/collab/:id/planner/tasks/:taskId', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'deleteTask']);
+$router->get('/api/me/tasks', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'myTasks']);
+$router->get('/api/me/planners', [AuthMiddleware::class, 'handle'], [PlannerController::class, 'myPlanners']);
 
 // ── SKILLS MODULE ─────────────────────────────────────────────────────────────
 // GET /api/skills: skill system + private skill milik user yang sedang login
@@ -105,3 +245,34 @@ $router->post('/api/skills', [AuthMiddleware::class, 'handle'], [SkillController
 // DELETE /api/skills/:id: hapus private skill milik user login (auth required)
 $router->delete('/api/skills/:id', [AuthMiddleware::class, 'handle'], [SkillController::class, 'deleteSkill']);
 
+// ── USERS MODULE ──────────────────────────────────────────────────────────────
+// GET /api/users/:id: public person detail for the profile page
+// (added 2026-11-10; "me" resolves to the logged-in user).
+$router->get('/api/users/:id', [OptionalAuthMiddleware::class, 'handle'], [UserController::class, 'getUser']);
+$router->get('/api/users/:id/activity', [OptionalAuthMiddleware::class, 'handle'], [UserController::class, 'getUserActivity']);
+
+// ── Reports + Admin (spec-admin) ─────────────────────────────────────────────
+$router->post('/api/reports', [AuthMiddleware::class, 'handle'], [ReportController::class, 'create']);
+$router->delete('/api/reports/:id', [AuthMiddleware::class, 'handle'], [ReportController::class, 'withdraw']);
+$router->post('/api/appeals', [AuthMiddleware::class, 'handle'], [AppealsController::class, 'create']);
+$router->get('/api/appeals', [AuthMiddleware::class, 'handle'], [AppealsController::class, 'mine']);
+$router->post('/api/appeals/suspended', [AppealsController::class, 'suspended']);
+$router->get('/api/admin/overview', [AdminMiddleware::class, 'handle'], [AdminController::class, 'overview']);
+$router->get('/api/admin/audit-log', [AdminMiddleware::class, 'handle'], [AdminController::class, 'auditLog']);
+$router->get('/api/admin/users', [AdminMiddleware::class, 'handle'], [AdminController::class, 'users']);
+$router->get('/api/admin/users/export', [AdminMiddleware::class, 'handle'], [AdminController::class, 'exportUsersCsv']);
+$router->get('/api/admin/users/:id', [AdminMiddleware::class, 'handle'], [AdminController::class, 'userDetail']);
+$router->get('/api/admin/content/:type', [AdminMiddleware::class, 'handle'], [AdminController::class, 'content']);
+$router->post('/api/admin/actions', [AdminMiddleware::class, 'handle'], [AdminMiddleware::class, 'requireSuper'], [AdminModerationController::class, 'actions']);
+$router->post('/api/admin/action-requests', [AdminMiddleware::class, 'handle'], [AdminModerationController::class, 'createRequest']);
+$router->get('/api/admin/action-requests', [AdminMiddleware::class, 'handle'], [AdminModerationController::class, 'listRequests']);
+$router->post('/api/admin/action-requests/:id/decide', [AdminMiddleware::class, 'handle'], [AdminMiddleware::class, 'requireSuper'], [AdminModerationController::class, 'decide']);
+$router->get('/api/admin/reports', [AdminMiddleware::class, 'handle'], [AdminModerationController::class, 'reports']);
+$router->post('/api/admin/reports/:id/dismiss', [AdminMiddleware::class, 'handle'], [AdminMiddleware::class, 'requireSuper'], [AdminModerationController::class, 'dismissReport']);
+$router->get('/api/admin/appeals', [AdminMiddleware::class, 'handle'], [AdminAppealsController::class, 'index']);
+$router->post('/api/admin/appeals/:id/decide', [AdminMiddleware::class, 'handle'], [AdminMiddleware::class, 'requireSuper'], [AdminAppealsController::class, 'decide']);
+$router->get('/api/admin/ai-moderation/overview', [AdminMiddleware::class, 'handle'], [AdminAiModerationController::class, 'overview']);
+$router->get('/api/admin/ai-moderation/verdicts', [AdminMiddleware::class, 'handle'], [AdminAiModerationController::class, 'verdicts']);
+$router->get('/api/admin/ai-moderation/flags', [AdminMiddleware::class, 'handle'], [AdminAiModerationController::class, 'flags']);
+$router->post('/api/admin/ai-moderation/jobs/:id/retry', [AdminMiddleware::class, 'handle'], [AdminMiddleware::class, 'requireSuper'], [AdminAiModerationController::class, 'retryJob']);
+$router->post('/api/admin/ai-moderation/flags/:id/resolve', [AdminMiddleware::class, 'handle'], [AdminMiddleware::class, 'requireSuper'], [AdminAiModerationController::class, 'resolveFlag']);

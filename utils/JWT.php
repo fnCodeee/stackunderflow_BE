@@ -70,6 +70,10 @@ class JWT
             $payload['iat'] = $now;
         }
 
+        if (!isset($payload['jti'])) {
+            $payload['jti'] = bin2hex(random_bytes(16));
+        }
+
         if ($expiresInSeconds !== null && !isset($payload['exp'])) {
             $payload['exp'] = $now + $expiresInSeconds;
         }

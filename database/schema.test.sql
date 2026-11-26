@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS users (
         username VARCHAR(100) NOT NULL,
         password VARCHAR(150) NOT NULL,
         email VARCHAR(100) NOT NULL UNIQUE,
+        google_id VARCHAR(255) NULL UNIQUE,
         is_active BOOLEAN NOT NULL DEFAULT TRUE,
         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -33,6 +34,7 @@ CREATE TABLE IF NOT EXISTS profiles (
     bio VARCHAR(150) NULL,
     photo_profile_url VARCHAR(150) NULL,
     photo_profile_public_id VARCHAR(100) NULL,
+    theme_mode VARCHAR(10) NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (id),
@@ -99,13 +101,13 @@ CREATE TABLE IF NOT EXISTS user_skill (
 CREATE TABLE IF NOT EXISTS public_posts (
     id VARCHAR(36) NOT NULL DEFAULT (UUID()),
     user_id VARCHAR(36) NOT NULL,
-    title VARCHAR(150) NOT NULL,
     description TEXT NOT NULL,
     portfolio_type ENUM('link', 'images') NOT NULL DEFAULT 'link',
     external_url VARCHAR(255) NULL,
     view_count INT NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL DEFAULT NULL,
 
     PRIMARY KEY (id),
     KEY idx_public_posts_user_id (user_id),
@@ -148,6 +150,43 @@ CREATE TABLE IF NOT EXISTS like_posts (
         FOREIGN KEY (user_id) REFERENCES users (id) 
         ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS comment_likes (
+    id VARCHAR(36) NOT NULL DEFAULT (UUID()),
+    comment_id VARCHAR(36) NOT NULL,
+    user_id VARCHAR(36) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_user_comment_like (user_id, comment_id),
+    KEY idx_comment_likes_comment_id (comment_id),
+    KEY idx_comment_likes_user_id (user_id),
+
+    CONSTRAINT fk_comment_likes_comment
+        FOREIGN KEY (comment_id) REFERENCES comments (id)
+        ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT fk_comment_likes_user
+        FOREIGN KEY (user_id) REFERENCES users (id)
+        ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS post_views (
+    id VARCHAR(36) NOT NULL DEFAULT (UUID()),
+    post_id VARCHAR(36) NOT NULL,
+    user_id VARCHAR(36) NOT NULL,
+    viewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_user_post_view (user_id, post_id),
+    KEY idx_post_views_post_id (post_id),
+    KEY idx_post_views_user_id (user_id),
+
+    CONSTRAINT fk_views_post
+        FOREIGN KEY (post_id) REFERENCES public_posts (id)
+        ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT fk_views_user
+        FOREIGN KEY (user_id) REFERENCES users (id)
+        ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS comments (
     id VARCHAR(36) NOT NULL DEFAULT (UUID()),
@@ -156,6 +195,7 @@ CREATE TABLE IF NOT EXISTS comments (
     content TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL DEFAULT NULL,
 
     PRIMARY KEY (id),
     KEY idx_comments_post_id (post_id),
@@ -178,11 +218,14 @@ CREATE TABLE IF NOT EXISTS collaborations (
     user_id VARCHAR(36) NOT NULL,
     title VARCHAR(255) NOT NULL,
     description TEXT NOT NULL,
+    `type` ENUM('coursework', 'portfolio', 'product') NOT NULL DEFAULT 'coursework',
     required_member INT NOT NULL DEFAULT 1,
+    due_date DATE NULL,
     communication_url VARCHAR(255) NULL,
-    status ENUM('open', 'closed') NOT NULL DEFAULT 'open',
+    status ENUM('open', 'in-progress', 'completed') NOT NULL DEFAULT 'open',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL DEFAULT NULL,
 
     PRIMARY KEY (id),
     KEY idx_collaborations_user_id (user_id),
@@ -234,7 +277,7 @@ CREATE TABLE IF NOT EXISTS collaboration_applications (
     user_id VARCHAR(36) NOT NULL,
     collab_id VARCHAR(36) NOT NULL,
     message TEXT NULL,
-    status ENUM('pending', 'accepted', 'rejected') NOT NULL DEFAULT 'pending',
+    status ENUM('pending', 'accepted', 'rejected', 'withdrawn') NOT NULL DEFAULT 'pending',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
@@ -260,6 +303,7 @@ CREATE TABLE IF NOT EXISTS user_collaboration (
     id VARCHAR(36) NOT NULL DEFAULT (UUID()),
     user_id VARCHAR(36) NOT NULL,
     collaboration_id VARCHAR(36) NOT NULL,
+    status ENUM('not-started', 'pending', 'complete', 'revise') NOT NULL DEFAULT 'not-started',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (id),
@@ -310,18 +354,145 @@ CREATE TABLE IF NOT EXISTS zone_messages (
     id VARCHAR(36) NOT NULL DEFAULT (UUID()),
     zone_id VARCHAR(36) NOT NULL,
     user_id VARCHAR(36) NOT NULL,
-    message VARCHAR(150) NOT NULL,
+    message TEXT NOT NULL,
+    reply_to_id VARCHAR(36) NULL,
     timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (id),
     KEY idx_zone_messages_zone_id (zone_id),
     KEY idx_zone_messages_user_id (user_id),
     KEY idx_zone_messages_timestamp (timestamp),
+    KEY idx_zone_messages_reply_to_id (reply_to_id),
 
     CONSTRAINT fk_zone_messages_zone
         FOREIGN KEY (zone_id) REFERENCES zone(id)
         ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT fk_zone_messages_user
         FOREIGN KEY (user_id) REFERENCES users(id)
+        ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT fk_zone_messages_reply
+        FOREIGN KEY (reply_to_id) REFERENCES zone_messages(id)
+        ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =========================================================
+-- 5. NOTIFICATIONS & DIRECT MESSAGES MODULE
+-- (added 2026-11-10 — the frontend needs these; the original
+-- schema had neither a notifications table nor a DM table)
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id VARCHAR(36) NOT NULL DEFAULT (UUID()),
+    user_id VARCHAR(36) NOT NULL,
+    actor_id VARCHAR(36) NULL,
+    `type` VARCHAR(50) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    target_type VARCHAR(50) NULL,
+    target_id VARCHAR(36) NULL,
+    is_read BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    KEY idx_notifications_user_id (user_id),
+    KEY idx_notifications_is_read (is_read),
+    KEY idx_notifications_created_at (created_at),
+
+    CONSTRAINT fk_notifications_user
+        FOREIGN KEY (user_id) REFERENCES users(id)
+        ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT fk_notifications_actor
+        FOREIGN KEY (actor_id) REFERENCES users(id)
+        ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS dm_conversations (
+    id VARCHAR(36) NOT NULL DEFAULT (UUID()),
+    application_id VARCHAR(36) NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_dm_conversations_application (application_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS dm_participants (
+    id VARCHAR(36) NOT NULL DEFAULT (UUID()),
+    conversation_id VARCHAR(36) NOT NULL,
+    user_id VARCHAR(36) NOT NULL,
+    is_muted TINYINT(1) NOT NULL DEFAULT 0,
+    is_pinned TINYINT(1) NOT NULL DEFAULT 0,
+    cleared_at TIMESTAMP NULL DEFAULT NULL,
+    hidden_at TIMESTAMP NULL DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_dm_participant (conversation_id, user_id),
+    KEY idx_dm_participants_conversation_id (conversation_id),
+    KEY idx_dm_participants_user_id (user_id),
+
+    CONSTRAINT fk_dm_participants_conversation
+        FOREIGN KEY (conversation_id) REFERENCES dm_conversations(id)
+        ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT fk_dm_participants_user
+        FOREIGN KEY (user_id) REFERENCES users(id)
         ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS dm_messages (
+    id VARCHAR(36) NOT NULL DEFAULT (UUID()),
+    conversation_id VARCHAR(36) NOT NULL,
+    sender_id VARCHAR(36) NOT NULL,
+    body TEXT NOT NULL,
+    is_read BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    KEY idx_dm_messages_conversation_id (conversation_id),
+    KEY idx_dm_messages_sender_id (sender_id),
+    KEY idx_dm_messages_created_at (created_at),
+
+    CONSTRAINT fk_dm_messages_conversation
+        FOREIGN KEY (conversation_id) REFERENCES dm_conversations(id)
+        ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT fk_dm_messages_sender
+        FOREIGN KEY (sender_id) REFERENCES users(id)
+        ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+-- =========================================================
+-- 8. UPLOAD GRANTS (direct upload Cloudinary, 2026-11-12)
+-- =========================================================
+
+-- =========================================================
+-- Migration: tabel upload_grants
+-- Tanggal: 2026-11-12
+-- Tujuan: mencatat setiap tanda tangan upload langsung ke
+-- Cloudinary yang diterbitkan POST /api/upload/signature.
+-- Dipakai untuk (1) rate limit per user per jam dan
+-- (2) audit siapa menerbitkan tanda tangan kapan.
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS upload_grants (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    user_id VARCHAR(36) NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    KEY idx_upload_grants_user_time (user_id, created_at),
+    CONSTRAINT fk_upload_grants_user FOREIGN KEY (user_id)
+        REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+n-- Zone read state for Discord-style unread indicators (Circle).
+-- One row per (user, zone): messages from others newer than
+-- last_read_at count as unread. Applied 2026-11-18.
+CREATE TABLE IF NOT EXISTS `zone_reads` (
+  `user_id` varchar(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `zone_id` varchar(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `last_read_at` datetime DEFAULT NULL,
+  PRIMARY KEY (`user_id`, `zone_id`),
+  KEY `idx_zone_reads_zone_id` (`zone_id`),
+  CONSTRAINT `fk_zone_reads_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `fk_zone_reads_zone` FOREIGN KEY (`zone_id`) REFERENCES `zone` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+

@@ -1,0 +1,277 @@
+<?php
+
+/**
+ * utils/Realtime.php
+ * ─────────────────────────────────────────────────────────────────────────────
+ * REALTIME PUBLISHER — mengirim event ke server WebSocket underflow-realtime
+ * (POST /publish di 127.0.0.1:8080) supaya notifikasi + angka like/komen
+ * sampai ke browser secara instan, tanpa menunggu polling 5 detik.
+ *
+ * Best-effort SEMATA: setiap publish dibungkus try/catch + timeout pendek
+ * (connect 200ms, total 500ms). Kalau server realtime mati / tidak
+ * terjangkau, like/komen tetap berhasil — pengiriman lalu dicover oleh
+ * polling 5 detik di frontend. Fungsi-fungsi di sini TIDAK PERNAH throw.
+ *
+ * URL publish default http://127.0.0.1:8080/publish, bisa dioverride
+ * lewat env REALTIME_URL (di .env).
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+
+declare(strict_types=1);
+
+class Realtime
+{
+    /** URL endpoint /publish server realtime. */
+    private static function publishUrl(): string
+    {
+        $url = getenv('REALTIME_URL') ?: '';
+        return $url !== '' ? $url : 'http://127.0.0.1:8080/publish';
+    }
+
+    /**
+     * Header untuk POST /publish. Server realtime memverifikasi shared
+     * secret (env REALTIME_PUBLISH_SECRET di .env — file yang sama yang
+     * dibaca server.js) lewat header X-Publish-Secret; tanpa secret yang
+     * cocok publish ditolak 401 dan polling 5 detik yang meng-cover,
+     * jadi kegagalan di sini tidak menggagalkan aksi user.
+     *
+     * @return list<string>
+     */
+    private static function publishHeaders(): array
+    {
+        $headers = ['Content-Type: application/json'];
+        $secret = getenv('REALTIME_PUBLISH_SECRET') ?: '';
+        if ($secret !== '') {
+            $headers[] = 'X-Publish-Secret: ' . $secret;
+        }
+        return $headers;
+    }
+
+    /**
+     * POST satu event ke server realtime. Tidak pernah throw.
+     *
+     * @param  array<string, mixed> $event Bentuk: ['type' => ..., 'userId'|'postId' => ..., 'payload' => [...]]
+     * @return void
+     */
+    public static function publish(array $event): void
+    {
+        try {
+            $ch = curl_init(self::publishUrl());
+            if ($ch === false) {
+                return;
+            }
+            curl_setopt_array($ch, [
+                CURLOPT_POST => true,
+                CURLOPT_POSTFIELDS => json_encode($event),
+                CURLOPT_HTTPHEADER => self::publishHeaders(),
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_CONNECTTIMEOUT_MS => 200,
+                CURLOPT_TIMEOUT_MS => 500,
+            ]);
+            curl_exec($ch);
+            curl_close($ch);
+        } catch (Throwable) {
+            // Best-effort: publish gagal = polling yang meng-cover.
+        }
+    }
+
+    /**
+     * Push notifikasi baru ke semua socket milik penerima.
+     *
+     * @param  string $userId UUID penerima notifikasi (pemilik post)
+     * @param  array<string, mixed> $apiRow Baris notifikasi bentuk API (NotificationModel::findApiRow)
+     * @return void
+     */
+    public static function publishNotification(string $userId, array $apiRow): void
+    {
+        self::publish([
+            'type' => 'notification',
+            'userId' => $userId,
+            'payload' => ['notification' => $apiRow],
+        ]);
+    }
+
+    /**
+     * Beritahu socket penerima bahwa satu notifikasi dihapus
+     * (like dibatalkan / komen dihapus) — notifikasinya hilang live.
+     *
+     * @param  string $userId UUID penerima notifikasi
+     * @param  string $notificationId UUID notifikasi yang dihapus
+     * @return void
+     */
+    public static function publishNotificationRemoved(string $userId, string $notificationId): void
+    {
+        self::publish([
+            'type' => 'notification-removed',
+            'userId' => $userId,
+            'payload' => ['notificationId' => $notificationId],
+        ]);
+    }
+
+    /**
+     * Broadcast angka like/komen terbaru sebuah post ke semua socket
+     * yang terhubung — angka di feed naik live.
+     *
+     * @param  string $postId UUID post
+     * @param  int    $likes Jumlah like saat ini
+     * @param  int    $commentCount Jumlah komen saat ini (tanpa soft-deleted)
+     * @return void
+     */
+    public static function publishPostStats(string $postId, int $likes, int $commentCount): void
+    {
+        self::publish([
+            'type' => 'post-stats',
+            'postId' => $postId,
+            'payload' => ['likes' => $likes, 'commentCount' => $commentCount],
+        ]);
+    }
+
+    /**
+     * Broadcast jumlah like terbaru sebuah komentar ke semua socket
+     * yang terhubung — angka like komen naik live di detail post.
+     *
+     * @param  string $commentId UUID komentar
+     * @param  string $postId UUID post pemilik komentar
+     * @param  int    $likes Jumlah like komentar saat ini
+     * @return void
+     */
+    public static function publishCommentStats(string $commentId, string $postId, int $likes): void
+    {
+        self::publish([
+            'type' => 'comment-stats',
+            'commentId' => $commentId,
+            'postId' => $postId,
+            'payload' => ['likes' => $likes],
+        ]);
+    }
+
+    /**
+     * Push satu pesan inbox baru ke lawan bicara — thread-nya naik
+     * dan pesannya muncul live tanpa menunggu polling.
+     *
+     * @param  string $userId        UUID penerima (lawan bicara)
+     * @param  string $conversationId UUID percakapan dm
+     * @param  array<string, mixed> $message Pesan bentuk API (InboxModel::insertMessage)
+     * @return void
+     */
+    public static function publishInboxMessage(string $userId, string $conversationId, array $message): void
+    {
+        self::publish([
+            'type' => 'inbox-message',
+            'userId' => $userId,
+            'payload' => ['conversationId' => $conversationId, 'message' => $message],
+        ]);
+    }
+
+    /**
+     * Beritahu satu user bahwa sebuah percakapan berubah tanpa pesan
+     * baru (status aplikasi berubah: diterima / ditolak / ditarik).
+     *
+     * @param  string $userId        UUID user yang diberi tahu
+     * @param  string $conversationId UUID percakapan dm
+     * @return void
+     */
+    public static function publishInboxUpdate(string $userId, string $conversationId): void
+    {
+        self::publish([
+            'type' => 'inbox-update',
+            'userId' => $userId,
+            'payload' => ['conversationId' => $conversationId],
+        ]);
+    }
+
+    /**
+     * Push satu pesan zone Circle baru ke satu anggota
+     * (CircleController memanggil ini sekali per anggota circle)
+     * supaya pesannya muncul live tanpa menunggu polling.
+     *
+     * @param  string $userId   UUID anggota penerima
+     * @param  string $circleId UUID circle pemilik zone
+     * @param  string $zoneId   UUID zone tempat pesan dikirim
+     * @param  array<string, mixed> $message Pesan bentuk API (CircleController::presentMessage)
+     * @return void
+     */
+    public static function publishZoneMessage(string $userId, string $circleId, string $zoneId, array $message): void
+    {
+        self::publish([
+            'type' => 'zone-message',
+            'userId' => $userId,
+            'payload' => ['circleId' => $circleId, 'zoneId' => $zoneId, 'message' => $message],
+        ]);
+    }
+
+    /**
+     * Beritahu satu anggota bahwa sebuah pesan zone diubah
+     * (edit teks) — salinan di layarnya diganti live.
+     *
+     * @param  string $userId   UUID anggota penerima
+     * @param  string $circleId UUID circle pemilik zone
+     * @param  string $zoneId   UUID zone tempat pesan berada
+     * @param  array<string, mixed> $message Pesan bentuk API terbaru
+     * @return void
+     */
+    public static function publishZoneMessageUpdated(string $userId, string $circleId, string $zoneId, array $message): void
+    {
+        self::publish([
+            'type' => 'zone-message-updated',
+            'userId' => $userId,
+            'payload' => ['circleId' => $circleId, 'zoneId' => $zoneId, 'message' => $message],
+        ]);
+    }
+
+    /**
+     * Beritahu satu anggota bahwa sebuah pesan zone dihapus —
+     * pesannya hilang dari layarnya live.
+     *
+     * @param  string $userId    UUID anggota penerima
+     * @param  string $circleId  UUID circle pemilik zone
+     * @param  string $zoneId    UUID zone tempat pesan berada
+     * @param  string $messageId UUID pesan yang dihapus
+     * @return void
+     */
+    public static function publishZoneMessageDeleted(string $userId, string $circleId, string $zoneId, string $messageId): void
+    {
+        self::publish([
+            'type' => 'zone-message-deleted',
+            'userId' => $userId,
+            'payload' => ['circleId' => $circleId, 'zoneId' => $zoneId, 'messageId' => $messageId],
+        ]);
+    }
+
+    /**
+     * Beritahu satu anggota collab bahwa sebuah task planner berubah
+     * (dibuat, digeser, diselesaikan, dst) — PlannerController
+     * memanggil ini sekali per anggota supaya planner-nya ter-refresh
+     * live tanpa menunggu polling.
+     *
+     * @param  string $userId   UUID anggota penerima
+     * @param  string $collabId UUID collaboration pemilik planner
+     * @param  array<string, mixed> $task Task bentuk API (PlannerController::presentTask)
+     * @return void
+     */
+    public static function publishPlannerTask(string $userId, string $collabId, array $task): void
+    {
+        self::publish([
+            'type' => 'planner-task',
+            'userId' => $userId,
+            'payload' => ['collabId' => $collabId, 'task' => $task],
+        ]);
+    }
+
+    /**
+     * Beritahu satu anggota collab bahwa sebuah task planner dihapus.
+     *
+     * @param  string $userId   UUID anggota penerima
+     * @param  string $collabId UUID collaboration pemilik planner
+     * @param  string $taskId   UUID task yang dihapus
+     * @return void
+     */
+    public static function publishPlannerTaskDeleted(string $userId, string $collabId, string $taskId): void
+    {
+        self::publish([
+            'type' => 'planner-task',
+            'userId' => $userId,
+            'payload' => ['collabId' => $collabId, 'task' => ['id' => $taskId, 'deleted' => true]],
+        ]);
+    }
+}

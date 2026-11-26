@@ -1,0 +1,49 @@
+# Underflow backend — service backend + pembersih media.
+#
+# Database TIDAK dibuat di compose ini: DB sudah tersedia di container
+# sebelah bernama "lorem" di server yang sama, MySQL jalan di port host 3306.
+# Backend menjangkaunya lewat host.docker.internal:3306.
+# Syaratnya: container lorem harus me-publish port 3306 ke host.
+#
+# Kredensial tidak ditulis di file ini (file ini aman di-commit):
+# semuanya ada di .env.docker — salinan .env saat ini dengan DB_HOST,
+# DB_USER, dan DB_PASSWORD disesuaikan untuk Docker. File itu sudah
+# masuk .gitignore, jangan di-commit.
+
+services:
+  backend:
+    build: .
+    container_name: underflow-backend
+    restart: unless-stopped
+    mem_limit: 256m
+    ports:
+      - "8000:8000"
+    # Di Linux, host.docker.internal tidak otomatis tersedia —
+    # baris ini memetakannya ke gateway host supaya selalu resolve.
+    # (Di Docker Desktop Windows/Mac baris ini tidak wajib, tapi aman dibiarkan.)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      # Server PHP bawaan jadi bisa melayani beberapa request bersamaan
+      # (CPU server 4 core) — request ringan tidak mengantre di belakang
+      # request yang lambat.
+      PHP_CLI_SERVER_WORKERS: "4"
+    volumes:
+      # Aplikasi membaca file .env lewat config/env.php (bukan env var
+      # container), jadi .env.docker di-mount menimpa .env di container:
+      # DB_HOST=host.docker.internal, DB_PORT=3306,
+      # DB_NAME=db_stack_underflow, DB_USER=underflow.
+      - ./.env.docker:/var/www/html/.env:ro
+
+  # Pembersih file yatim Cloudinary (scripts/cleanup_orphan_media.php):
+  # gambar yang terunggah tapi tidak pernah dirujuk post/collab/profil
+  # mana pun dihapus setelah 24 jam. Service ini tidur 24 jam di antara
+  # dua kali jalan, jadi praktis tidak memakai sumber daya.
+  media-cleaner:
+    build: .
+    container_name: underflow-media-cleaner
+    restart: unless-stopped
+    mem_limit: 128m
+    volumes:
+      - ./.env.docker:/var/www/html/.env:ro
+    command: ["sh", "-c", "while true; do php scripts/cleanup_orphan_media.php --execute; sleep 86400; done"]

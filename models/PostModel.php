@@ -21,7 +21,6 @@ class PostModel
      *
      * @param  array{
      *     user_id: string,
-     *     title: string,
      *     description: string,
      *     portfolio_type?: string,
      *     external_url?: ?string,
@@ -37,7 +36,6 @@ class PostModel
 
         $id = $data['id'] ?? self::generateUuid();
         $userId = $data['user_id'];
-        $title = $data['title'];
         $description = $data['description'];
         $portfolioType = $data['portfolio_type'] ?? 'link';
         $externalUrl = $data['external_url'] ?? null;
@@ -50,14 +48,13 @@ class PostModel
         try {
             // 1. Insert ke tabel public_posts
             $stmt = $pdo->prepare(
-                "INSERT INTO public_posts (id, user_id, title, description, portfolio_type, external_url, view_count)
-                 VALUES (:id, :user_id, :title, :description, :portfolio_type, :external_url, 0)"
+                "INSERT INTO public_posts (id, user_id, description, portfolio_type, external_url, view_count)
+                 VALUES (:id, :user_id, :description, :portfolio_type, :external_url, 0)"
             );
 
             $stmt->execute([
                 ':id'             => $id,
                 ':user_id'        => $userId,
-                ':title'          => $title,
                 ':description'    => $description,
                 ':portfolio_type' => $portfolioType,
                 ':external_url'   => $externalUrl,
@@ -100,7 +97,6 @@ class PostModel
         return [
             'id'               => $id,
             'user_id'          => $userId,
-            'title'            => $title,
             'description'      => $description,
             'portfolio_type'   => $portfolioType,
             'external_url'     => $externalUrl,
@@ -123,20 +119,18 @@ class PostModel
     {
         $pdo = getDB();
 
-        // 1. Increment view_count dan ambil data utama post dengan user + profile
-        $stmt = $pdo->prepare("
-            UPDATE public_posts 
-            SET view_count = view_count + 1 
-            WHERE id = :id
-        ");
-        $stmt->execute([':id' => $id]);
+        // 1. Catat view (satu akun dihitung sekali per post) lalu ambil
+        // data utama post dengan user + profile. Tamu (tanpa user id)
+        // tidak dihitung.
+        if ($currentUserId !== null && $currentUserId !== '') {
+            self::recordView($id, $currentUserId);
+        }
 
         // 2. Ambil post yang sudah diupdate beserta user dan profile
         $sql = "
             SELECT 
                 p.id,
                 p.user_id,
-                p.title,
                 p.description,
                 p.portfolio_type,
                 p.external_url,
@@ -144,11 +138,12 @@ class PostModel
                 p.created_at,
                 p.updated_at,
                 u.username,
+                pr.full_name,
                 pr.photo_profile_url
             FROM public_posts p
             LEFT JOIN users u ON p.user_id = u.id
             LEFT JOIN profiles pr ON p.user_id = pr.user_id
-            WHERE p.id = :id
+            WHERE p.id = :id AND p.deleted_at IS NULL AND moderation_state = 'visible'
             LIMIT 1
         ";
         $stmt = $pdo->prepare($sql);
@@ -180,7 +175,7 @@ class PostModel
         $likeCount = (int)($likeStmt->fetchColumn() ?? 0);
 
         // 5. Ambil comment_count
-        $commentStmt = $pdo->prepare("SELECT COUNT(*) as count FROM comments WHERE post_id = :post_id");
+        $commentStmt = $pdo->prepare("SELECT COUNT(*) as count FROM comments WHERE post_id = :post_id AND deleted_at IS NULL AND moderation_state = 'visible'");
         $commentStmt->execute([':post_id' => $id]);
         $commentCount = (int)($commentStmt->fetchColumn() ?? 0);
 
@@ -202,11 +197,12 @@ class PostModel
                 c.created_at,
                 c.updated_at,
                 u.username,
+                pr.full_name,
                 pr.photo_profile_url
             FROM comments c
             LEFT JOIN users u ON c.user_id = u.id
             LEFT JOIN profiles pr ON c.user_id = pr.user_id
-            WHERE c.post_id = :post_id
+            WHERE c.post_id = :post_id AND c.deleted_at IS NULL AND moderation_state = 'visible'
             ORDER BY c.created_at DESC
         ";
         $commentsStmt = $pdo->prepare($commentsSql);
@@ -225,6 +221,7 @@ class PostModel
                 'user' => [
                     'id' => $c['user_id'],
                     'username' => $c['username'] ?? '',
+                    'full_name' => $c['full_name'] ?? '',
                     'photo_profile_url' => $c['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
                 ],
             ];
@@ -234,7 +231,6 @@ class PostModel
         return [
             'id' => $post['id'],
             'user_id' => $post['user_id'],
-            'title' => $post['title'],
             'description' => $post['description'],
             'portfolio_type' => $post['portfolio_type'],
             'external_url' => $post['external_url'],
@@ -249,10 +245,58 @@ class PostModel
             'owner' => [
                 'id' => $post['user_id'],
                 'username' => $post['username'] ?? '',
+                'full_name' => $post['full_name'] ?? '',
                 'photo_profile_url' => $post['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
             ],
             'comments' => $commentsWithProfile,
         ];
+    }
+
+    /**
+     * Mencatat satu view untuk sebuah post — satu akun dihitung maksimal
+     * sekali per post. Baris (user_id, post_id) di post_views bersifat unik
+     * (UNIQUE KEY uq_user_post_view); kalau sudah ada, view_count tidak
+     * ditambah lagi. Dipakai endpoint POST /api/posts/:postId/view.
+     *
+     * @param  string $postId UUID post
+     * @param  string $userId UUID user yang melihat
+     * @return int|null view_count terbaru, atau null jika post tidak ditemukan / sudah dihapus
+     */
+    public static function recordView(string $postId, string $userId): ?int
+    {
+        $pdo = getDB();
+
+        // 0. Post harus ada dan belum dihapus.
+        $stmt = $pdo->prepare("SELECT 1 FROM public_posts WHERE id = :id AND deleted_at IS NULL");
+        $stmt->execute([':id' => $postId]);
+        if ($stmt->fetchColumn() === false) {
+            return null;
+        }
+
+        // 1. Catat siapa yang melihat (unik per user+post — duplikat diabaikan).
+        $stmt = $pdo->prepare("
+            INSERT IGNORE INTO post_views (post_id, user_id)
+            VALUES (:post_id, :user_id)
+        ");
+        $stmt->execute([':post_id' => $postId, ':user_id' => $userId]);
+        $isNewView = $stmt->rowCount() === 1;
+
+        // 2. Tambah view_count hanya kalau ini view pertama akun tersebut.
+        if ($isNewView) {
+            $stmt = $pdo->prepare("
+                UPDATE public_posts
+                SET view_count = view_count + 1
+                WHERE id = :id
+            ");
+            $stmt->execute([':id' => $postId]);
+        }
+
+        // 3. Kembalikan view_count terbaru.
+        $stmt = $pdo->prepare("SELECT view_count FROM public_posts WHERE id = :id");
+        $stmt->execute([':id' => $postId]);
+        $count = $stmt->fetchColumn();
+
+        return $count === false ? null : (int)$count;
     }
 
     /**
@@ -266,7 +310,7 @@ class PostModel
         $pdo = getDB();
 
         // 1. Ambil data utama post
-        $stmt = $pdo->prepare("SELECT * FROM public_posts WHERE id = :id LIMIT 1");
+        $stmt = $pdo->prepare("SELECT * FROM public_posts WHERE id = :id AND deleted_at IS NULL LIMIT 1");
         $stmt->execute([':id' => $id]);
         $post = $stmt->fetch();
 
@@ -296,7 +340,31 @@ class PostModel
     }
 
     /**
-     * Menghapus post berdasarkan ID (berguna untuk testing/cleanup).
+     * Hitung jumlah like + komen sebuah post saat ini — dipakai untuk
+     * push post-stats ke realtime setelah like/unlike/komen.
+     * Komen yang sudah soft-deleted tidak dihitung (deleted_at IS NULL),
+     * sama seperti penghitungan di getAll.
+     *
+     * @param  string $postId UUID post
+     * @return array{likes: int, commentCount: int}
+     */
+    public static function getCounts(string $postId): array
+    {
+        $pdo = getDB();
+
+        $stmt = $pdo->prepare('SELECT COUNT(*) FROM like_posts WHERE post_id = ?');
+        $stmt->execute([$postId]);
+        $likes = (int)$stmt->fetchColumn();
+
+        $stmt = $pdo->prepare('SELECT COUNT(*) FROM comments WHERE post_id = ? AND deleted_at IS NULL AND moderation_state = \'visible\'');
+        $stmt->execute([$postId]);
+        $commentCount = (int)$stmt->fetchColumn();
+
+        return ['likes' => $likes, 'commentCount' => $commentCount];
+    }
+
+    /**
+     * Soft delete post berdasarkan ID (berguna untuk testing/cleanup).
      *
      * @param  string $id
      * @return bool
@@ -304,13 +372,14 @@ class PostModel
     public static function deleteById(string $id): bool
     {
         $pdo = getDB();
-        $stmt = $pdo->prepare("DELETE FROM public_posts WHERE id = :id");
+        $stmt = $pdo->prepare("UPDATE public_posts SET deleted_at = NOW() WHERE id = :id AND deleted_at IS NULL");
         return $stmt->execute([':id' => $id]);
     }
 
     /**
-     * Menghapus post beserta seluruh data terkait (like_posts, comments, media_posts)
-     * dalam 1 database transaction sesuai dengan behavior Express baseline.
+     * Soft delete post: set deleted_at = NOW(). Row tetap ada di database
+     * (bisa di-restore / diaudit); likes, comments, dan media terkait
+     * TIDAK dihapus.
      *
      * @param  string $id UUID post
      * @return bool True jika berhasil dihapus
@@ -318,34 +387,8 @@ class PostModel
     public static function delete(string $id): bool
     {
         $pdo = getDB();
-
-        $pdo->beginTransaction();
-
-        try {
-            // 1. Hapus likes terkait
-            $likeStmt = $pdo->prepare("DELETE FROM like_posts WHERE post_id = :post_id");
-            $likeStmt->execute([':post_id' => $id]);
-
-            // 2. Hapus comments terkait
-            $commentStmt = $pdo->prepare("DELETE FROM comments WHERE post_id = :post_id");
-            $commentStmt->execute([':post_id' => $id]);
-
-            // 3. Hapus media_posts terkait
-            $mediaStmt = $pdo->prepare("DELETE FROM media_posts WHERE post_id = :post_id");
-            $mediaStmt->execute([':post_id' => $id]);
-
-            // 4. Hapus record utama di public_posts
-            $postStmt = $pdo->prepare("DELETE FROM public_posts WHERE id = :id");
-            $postStmt->execute([':id' => $id]);
-
-            $pdo->commit();
-            return true;
-        } catch (Throwable $e) {
-            if ($pdo->inTransaction()) {
-                $pdo->rollBack();
-            }
-            throw $e;
-        }
+        $stmt = $pdo->prepare("UPDATE public_posts SET deleted_at = NOW() WHERE id = :id AND deleted_at IS NULL");
+        return $stmt->execute([':id' => $id]);
     }
 
     /**
@@ -355,7 +398,7 @@ class PostModel
      * @param  string|null $currentUserId ID user yang sedang login (opsional) untuk mengecek is_liked
      * @return array<int, array<string, mixed>>
      */
-    public static function getAll(?string $currentUserId = null): array
+    public static function getAll(?string $currentUserId = null, ?int $limit = null, ?int $offset = null): array
     {
         $pdo = getDB();
 
@@ -364,7 +407,6 @@ class PostModel
             SELECT 
                 p.id,
                 p.user_id,
-                p.title,
                 p.description,
                 p.portfolio_type,
                 p.external_url,
@@ -372,14 +414,24 @@ class PostModel
                 p.created_at,
                 p.updated_at,
                 u.username,
+                pr.full_name,
                 pr.photo_profile_url
             FROM public_posts p
             LEFT JOIN users u ON p.user_id = u.id
             LEFT JOIN profiles pr ON p.user_id = pr.user_id
+            WHERE p.deleted_at IS NULL AND moderation_state = 'visible'
             ORDER BY p.created_at DESC
         ";
 
-        $stmt = $pdo->query($sql);
+        if ($limit !== null) {
+            $sql .= ' LIMIT :__limit OFFSET :__offset';
+            $stmt = $pdo->prepare($sql);
+            $stmt->bindValue(':__limit', $limit, PDO::PARAM_INT);
+            $stmt->bindValue(':__offset', $offset ?? 0, PDO::PARAM_INT);
+            $stmt->execute();
+        } else {
+            $stmt = $pdo->query($sql);
+        }
         $posts = $stmt->fetchAll();
 
         if (empty($posts)) {
@@ -425,7 +477,7 @@ class PostModel
         $commentStmt = $pdo->prepare("
             SELECT post_id, COUNT(*) as count 
             FROM comments 
-            WHERE post_id IN ($placeholders) 
+            WHERE post_id IN ($placeholders) AND deleted_at IS NULL AND moderation_state = 'visible' 
             GROUP BY post_id
         ");
         $commentStmt->execute($postIds);
@@ -453,9 +505,9 @@ class PostModel
                 'user_id'          => [
                     'id'                => $p['user_id'],
                     'username'          => $p['username'] ?? '',
+                    'full_name'         => $p['full_name'] ?? '',
                     'photo_profile_url' => $p['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
                 ],
-                'title'            => $p['title'],
                 'description'      => $p['description'],
                 'portfolio_type'   => $p['portfolio_type'],
                 'external_url'     => $p['external_url'],
@@ -479,7 +531,6 @@ class PostModel
           *
           * @param  string $id UUID post
           * @param  array{
-          *     title: string,
           *     description: string,
           *     external_url: string,
           *     portfolio_type?: string,
@@ -493,7 +544,7 @@ class PostModel
              $pdo = getDB();
 
              // 1. Cek post exists
-             $checkStmt = $pdo->prepare("SELECT user_id FROM public_posts WHERE id = :id LIMIT 1");
+             $checkStmt = $pdo->prepare("SELECT user_id FROM public_posts WHERE id = :id AND deleted_at IS NULL LIMIT 1");
              $checkStmt->execute([':id' => $id]);
              $existing = $checkStmt->fetch();
 
@@ -501,7 +552,6 @@ class PostModel
                  return null; // post tidak ditemukan
              }
 
-             $title = $data['title'];
              $description = $data['description'];
              $externalUrl = $data['external_url'];
              $portfolioType = $data['portfolio_type'] ?? 'link';
@@ -514,17 +564,15 @@ class PostModel
              try {
                  $stmt = $pdo->prepare("
                      UPDATE public_posts 
-                     SET title = :title,
-                         description = :description,
+                     SET description = :description,
                          external_url = :external_url,
                          portfolio_type = :portfolio_type,
                          updated_at = CURRENT_TIMESTAMP
-                     WHERE id = :id
+                     WHERE id = :id AND deleted_at IS NULL
                  ");
 
                  $stmt->execute([
                      ':id'             => $id,
-                     ':title'          => $title,
                      ':description'    => $description,
                      ':external_url'   => $externalUrl,
                      ':portfolio_type' => $portfolioType,
@@ -580,4 +628,13 @@ class PostModel
              $data[8] = chr(ord($data[8]) & 0x3f | 0x80); // variant RFC 4122
              return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
          }
-     }
+     
+    /** Jumlah post yang terlihat publik (metadata pagination feed). */
+    public static function countVisiblePosts(): int
+    {
+        $stmt = getDB()->query(
+            "SELECT COUNT(*) FROM public_posts WHERE deleted_at IS NULL AND moderation_state = 'visible'"
+        );
+        return (int) $stmt->fetchColumn();
+    }
+}

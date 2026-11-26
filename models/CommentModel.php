@@ -50,6 +50,7 @@ class CommentModel
                 '_id'               => $userId,
                 'id'                => $userId,
                 'username'          => '',
+                'full_name'         => '',
                 'photo_profile_url' => ProfileModel::DEFAULT_PHOTO_URL,
             ],
             'postId'     => $postId,
@@ -80,11 +81,12 @@ class CommentModel
                 c.created_at,
                 c.updated_at,
                 u.username,
+                pr.full_name,
                 pr.photo_profile_url
             FROM comments c
             LEFT JOIN users u ON c.user_id = u.id
             LEFT JOIN profiles pr ON c.user_id = pr.user_id
-            WHERE c.id = :id
+            WHERE c.id = :id AND c.deleted_at IS NULL
             LIMIT 1
         ";
         $stmt = $pdo->prepare($sql);
@@ -104,11 +106,13 @@ class CommentModel
                 '_id'               => $row['user_id'],
                 'id'                => $row['user_id'],
                 'username'          => $row['username'] ?? '',
+                'full_name'         => $row['full_name'] ?? '',
                 'photo_profile_url' => $photoUrl,
             ],
             'user'       => [
                 'id'                => $row['user_id'],
                 'username'          => $row['username'] ?? '',
+                'full_name'         => $row['full_name'] ?? '',
                 'photo_profile_url' => $photoUrl,
             ],
             'postId'     => $row['post_id'],
@@ -130,7 +134,7 @@ class CommentModel
     public static function findById(string $commentId): ?array
     {
         $pdo = getDB();
-        $stmt = $pdo->prepare("SELECT * FROM comments WHERE id = :id LIMIT 1");
+        $stmt = $pdo->prepare("SELECT * FROM comments WHERE id = :id AND deleted_at IS NULL LIMIT 1");
         $stmt->execute([':id' => $commentId]);
         $row = $stmt->fetch();
         return $row ?: null;
@@ -142,7 +146,7 @@ class CommentModel
      * @param  string $postId UUID post
      * @return array<int, array<string, mixed>>
      */
-    public static function getByPostId(string $postId): array
+    public static function getByPostId(string $postId, ?string $currentUserId = null): array
     {
         $pdo = getDB();
         $sql = "
@@ -154,15 +158,18 @@ class CommentModel
                 c.created_at,
                 c.updated_at,
                 u.username,
-                pr.photo_profile_url
+                pr.full_name,
+                pr.photo_profile_url,
+                (SELECT COUNT(*) FROM comment_likes cl WHERE cl.comment_id = c.id) AS like_count,
+                (SELECT 1 FROM comment_likes cl2 WHERE cl2.comment_id = c.id AND cl2.user_id = ? LIMIT 1) AS is_liked
             FROM comments c
             LEFT JOIN users u ON c.user_id = u.id
             LEFT JOIN profiles pr ON c.user_id = pr.user_id
-            WHERE c.post_id = :post_id
+            WHERE c.post_id = ? AND c.deleted_at IS NULL AND moderation_state = 'visible'
             ORDER BY c.created_at DESC
         ";
         $stmt = $pdo->prepare($sql);
-        $stmt->execute([':post_id' => $postId]);
+        $stmt->execute([$currentUserId ?? '', $postId]);
         $rows = $stmt->fetchAll();
 
         $comments = [];
@@ -175,11 +182,13 @@ class CommentModel
                     '_id'               => $row['user_id'],
                     'id'                => $row['user_id'],
                     'username'          => $row['username'] ?? '',
+                'full_name'         => $row['full_name'] ?? '',
                     'photo_profile_url' => $photoUrl,
                 ],
                 'user'       => [
                     'id'                => $row['user_id'],
                     'username'          => $row['username'] ?? '',
+                'full_name'         => $row['full_name'] ?? '',
                     'photo_profile_url' => $photoUrl,
                 ],
                 'postId'     => $row['post_id'],
@@ -189,6 +198,8 @@ class CommentModel
                 'created_at' => $row['created_at'],
                 'updatedAt'  => $row['updated_at'],
                 'updated_at' => $row['updated_at'],
+                'like_count' => (int)($row['like_count'] ?? 0),
+                'is_liked'   => (bool)($row['is_liked'] ?? false),
             ];
         }
 
@@ -196,7 +207,7 @@ class CommentModel
     }
 
     /**
-     * Menghapus komentar berdasarkan ID.
+     * Soft delete komentar berdasarkan ID (set deleted_at = NOW()).
      *
      * @param  string $commentId UUID komentar
      * @return bool
@@ -204,7 +215,7 @@ class CommentModel
     public static function delete(string $commentId): bool
     {
         $pdo = getDB();
-        $stmt = $pdo->prepare("DELETE FROM comments WHERE id = :id");
+        $stmt = $pdo->prepare("UPDATE comments SET deleted_at = NOW() WHERE id = :id AND deleted_at IS NULL");
         return $stmt->execute([':id' => $commentId]);
     }
 
@@ -217,7 +228,7 @@ class CommentModel
     public static function countByPostId(string $postId): int
     {
         $pdo = getDB();
-        $stmt = $pdo->prepare("SELECT COUNT(*) FROM comments WHERE post_id = :post_id");
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM comments WHERE post_id = :post_id AND deleted_at IS NULL AND moderation_state = 'visible'");
         $stmt->execute([':post_id' => $postId]);
         return (int)$stmt->fetchColumn();
     }

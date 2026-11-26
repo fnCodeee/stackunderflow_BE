@@ -1,0 +1,117 @@
+<?php
+
+/**
+ * tests/ai_moderation_unit.php
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Unit test logika murni AI Moderator: pemetaan skor -> keputusan,
+ * penggabungan skor dan parser skor model.
+ * Tidak menyentuh database dan tidak memanggil API.
+ *
+ * Jalankan: php tests/ai_moderation_unit.php
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+
+declare(strict_types=1);
+
+define('BASE_PATH', dirname(__DIR__));
+require_once BASE_PATH . '/config/env.php';
+require_once BASE_PATH . '/models/AiModerationService.php';
+
+$cfg = aiModerationConfig();
+$failures = 0;
+
+function check(string $name, bool $ok): void
+{
+    global $failures;
+    echo ($ok ? 'PASS' : 'FAIL') . "  $name\n";
+    if (!$ok) {
+        $failures++;
+    }
+}
+
+function scores(int $judol = 0, int $seksual = 0, int $kekerasan = 0, int $miras = 0, int $berbahaya = 0, int $kata_kasar = 0, string $alasan = ''): array
+{
+    return ['judol' => $judol, 'seksual' => $seksual, 'kekerasan' => $kekerasan, 'miras' => $miras, 'berbahaya' => $berbahaya, 'kata_kasar' => $kata_kasar, 'alasan' => $alasan];
+}
+
+// decide(): ambang remove 70, abu-abu 40.
+check('decide 85 -> remove', AiModerationService::decide(scores(judol: 85), $cfg) === 'remove');
+check('decide 70 persis -> remove', AiModerationService::decide(scores(miras: 70), $cfg) === 'remove');
+check('decide 69 -> flag', AiModerationService::decide(scores(judol: 69), $cfg) === 'flag');
+check('decide 40 persis -> flag', AiModerationService::decide(scores(berbahaya: 40), $cfg) === 'flag');
+check('decide 39 -> clean', AiModerationService::decide(scores(seksual: 39), $cfg) === 'clean');
+check('decide semua 0 -> clean', AiModerationService::decide(scores(), $cfg) === 'clean');
+
+// mergeScores(): maksimum per kategori, alasan dari set tertinggi.
+$merged = AiModerationService::mergeScores(scores(judol: 30, alasan: 'pertama'), scores(judol: 90, miras: 20, alasan: 'kedua'));
+check('merge ambil maksimum', $merged['judol'] === 90 && $merged['miras'] === 20);
+check('merge alasan dari set tertinggi', $merged['alasan'] === 'kedua');
+check('merge satu set kosong', AiModerationService::mergeScores()['judol'] === 0);
+
+// topCategory()
+check('topCategory miras', AiModerationService::topCategory(scores(judol: 10, miras: 77)) === 'miras');
+
+// kata_kasar (kebijakan v3, keputusan user 2026-11-17):
+// tidak ada tingkat ringan, semua makian dihapus; harfiah lolos.
+check('kata_kasar 50 -> remove', AiModerationService::decide(scores(kata_kasar: 50), $cfg) === 'remove');
+check('kata_kasar 40 persis -> remove', AiModerationService::decide(scores(kata_kasar: 40), $cfg) === 'remove');
+check('kata_kasar 39 -> clean', AiModerationService::decide(scores(kata_kasar: 39), $cfg) === 'clean');
+check('kata_kasar 85 -> remove', AiModerationService::decide(scores(kata_kasar: 85), $cfg) === 'remove');
+check('kategori lain 50 tetap flag', AiModerationService::decide(scores(miras: 50), $cfg) === 'flag');
+
+// OpenRouterClient::parseScores()
+$parsed = OpenRouterClient::parseScores('{"judol": 95, "seksual": 0, "kekerasan": 0, "miras": 0, "berbahaya": 0, "kata_kasar": 0, "alasan": "Iklan judi slot."}');
+check('parse JSON bersih', $parsed['judol'] === 95 && $parsed['kata_kasar'] === 0 && $parsed['alasan'] === 'Iklan judi slot.');
+$wrapped = OpenRouterClient::parseScores("Berikut hasilnya:\n{\"judol\": 10, \"seksual\": 0, \"kekerasan\": 0, \"miras\": 0, \"berbahaya\": 0, \"kata_kasar\": 0, \"alasan\": \"Aman.\"}\nSemoga membantu.");
+check('parse JSON terbungkus teks', $wrapped['judol'] === 10);
+$clamped = OpenRouterClient::parseScores('{"judol": 140, "seksual": -5, "kekerasan": 0, "miras": 0, "berbahaya": 0, "kata_kasar": 0, "alasan": "x"}');
+check('parse clamp 0-100', $clamped['judol'] === 100 && $clamped['seksual'] === 0);
+try {
+    OpenRouterClient::parseScores('{"judol": 10}');
+    check('parse kunci hilang -> exception', false);
+} catch (RuntimeException) {
+    check('parse kunci hilang -> exception', true);
+}
+try {
+    OpenRouterClient::parseScores('bukan json sama sekali');
+    check('parse sampah -> exception', false);
+} catch (RuntimeException) {
+    check('parse sampah -> exception', true);
+}
+
+// Notice v4 (2026-11-17): label kategori terbaca manusia dan
+// prompt_version naik mengikuti perubahan prompt alasan.
+check('label kata_kasar', AiModerationService::categoryLabel('kata_kasar') === 'Profanity');
+check('label judol', AiModerationService::categoryLabel('judol') === 'Gambling promotion');
+check('label kategori asing apa adanya', AiModerationService::categoryLabel('lainnya') === 'lainnya');
+check('prompt_version v7', $cfg['prompt_version'] === 'v7');
+
+// Bahasa alasan mengikuti bahasa konten (keputusan user
+// 2026-11-17): deteksi kata penanda, kosong berarti Inggris.
+check('bahasa alasan teks ID', AiModerationService::reasonLanguageFor('Tolong, anjing saya hilang di sekitar kampus sejak kemarin.') === 'id');
+check('bahasa alasan teks EN', AiModerationService::reasonLanguageFor('Hello everyone, I lost my dog near campus yesterday. Please help.') === 'en');
+check('bahasa alasan judol ID', AiModerationService::reasonLanguageFor('SLOT GACOR HARI INI! Bonus new member 100%, depo pulsa tanpa potongan, daftar lewat WA sekarang!') === 'id');
+check('bahasa alasan judol EN', AiModerationService::reasonLanguageFor('GACOR SLOTS TODAY! 100% new member bonus, deposit via e-wallet with no fees, register on WhatsApp now!') === 'en');
+check('bahasa alasan makian ID', AiModerationService::reasonLanguageFor('dasar bajingan kamu') === 'id');
+check('bahasa alasan makian EN', AiModerationService::reasonLanguageFor('you are a damn idiot') === 'en');
+check('bahasa alasan kosong -> en', AiModerationService::reasonLanguageFor('') === 'en');
+check('bahasa alasan null -> en', AiModerationService::reasonLanguageFor(null) === 'en');
+
+// Routing provider (2026-11-17, diperbarui 2026-11-20): primary
+// di xKiro, eskalasi zona abu-abu pindah ke DeepSeek free di
+// Token Harbor, rem kuota hanya menjaga free OpenRouter.
+check('provider mistral -> xkiro', OpenRouterClient::providerFor($cfg, 'mistralai/mistral-medium-3.5') === 'xkiro');
+check('provider deepseek -> tokenharbor', OpenRouterClient::providerFor($cfg, 'deepseek-v4.1-flash:free') === 'tokenharbor');
+check('provider nemotron -> openrouter', OpenRouterClient::providerFor($cfg, 'nvidia/nemotron-3.5-super-vl:free') === 'openrouter');
+check('primary mistral medium', $cfg['primary_model'] === 'mistralai/mistral-medium-3.5');
+check('eskalasi deepseek', $cfg['escalation_model'] === 'deepseek-v4.1-flash:free');
+$chainFull = AiModerationService::chainFor($cfg, false);
+check('rantai penuh mulai dari mistral', $chainFull[0] === 'mistralai/mistral-medium-3.5' && count($chainFull) === 5);
+check('rantai penuh deepseek kedua', $chainFull[1] === 'deepseek-v4.1-flash:free');
+$chainCapped = AiModerationService::chainFor($cfg, true);
+check('rantai rem aktif tanpa free openrouter', !in_array('nvidia/nemotron-3.5-super-vl:free', $chainCapped, true) && !in_array('inclusionai/ling-3.2-flash:free', $chainCapped, true) && in_array('mistralai/mistral-medium-3.5', $chainCapped, true) && in_array('deepseek-v4.1-flash:free', $chainCapped, true) && in_array('qwen/qwen3.8-omni-flash', $chainCapped, true));
+check('eskalasi efektif tanpa rem deepseek', AiModerationService::effectiveEscalationModel($cfg, false) === 'deepseek-v4.1-flash:free');
+check('eskalasi efektif rem aktif tetap deepseek', AiModerationService::effectiveEscalationModel($cfg, true) === 'deepseek-v4.1-flash:free');
+
+echo $failures === 0 ? "\nSEMUA LULUS\n" : "\n$failures GAGAL\n";
+exit($failures === 0 ? 0 : 1);

@@ -100,7 +100,7 @@ class ProfileModel
      */
     public static function updateByUserId(string $userId, array $data): ?array
     {
-        $allowedFields = ['full_name', 'bio', 'photo_profile_url', 'photo_profile_public_id'];
+        $allowedFields = ['full_name', 'bio', 'profile_detail', 'photo_profile_url', 'photo_profile_public_id', 'theme_mode'];
         $setClauses = [];
         $params = [':user_id' => $userId];
 

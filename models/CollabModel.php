@@ -6,7 +6,7 @@
  * COLLABORATION MODEL (Data Access Layer)
  *
  * Bertanggung jawab terhadap operasi database untuk tabel `collaborations`,
- * relasi `collab_media`, `collab_skills`, dan otomatisasi pembuatan `circle`.
+ * relasi `collab_media`, `collab_skills`, dan pembuatan `circle` bila owner memilihnya.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -20,8 +20,9 @@ require_once BASE_PATH . '/models/SkillModel.php';
 class CollabModel
 {
     /**
-     * Membuat kolaborasi baru beserta media, skills, dan auto-create circle
-     * dalam satu transaksi database PDO atomik.
+     * Membuat kolaborasi baru beserta media dan skills dalam satu
+     * transaksi database PDO atomik. Circle hanya dibuat bila owner
+     * memilih group_mode 'circle' (keputusan 2026-11-18).
      *
      * @param  array{
      *     user_id: string,
@@ -33,6 +34,8 @@ class CollabModel
      *     media_public_ids?: array<int, ?string>,
      *     skills_needed?: array<int, mixed>,
      *     circle_photo_profile_url?: ?string,
+     *     group_mode?: string,
+     *     communication_url?: ?string,
      *     id?: string
      * } $data
      * @return array<string, mixed> Data collaboration yang baru dibuat
@@ -48,10 +51,26 @@ class CollabModel
         $description = $data['description'];
         $requiredMember = (int) ($data['required_member'] ?? 1);
         $status = $data['status'] ?? 'open';
+        $type = in_array($data['type'] ?? '', ['coursework', 'portfolio', 'product'], true)
+            ? $data['type']
+            : 'coursework';
+        $dueDate = $data['due_date'] ?? null;
+        if ($dueDate !== null && $dueDate !== '' && strtotime((string) $dueDate) === false) {
+            $dueDate = null;
+        }
+        if ($dueDate === '') {
+            $dueDate = null;
+        }
         $mediaUrls = $data['media_urls'] ?? [];
         $mediaPublicIds = $data['media_public_ids'] ?? [];
         $skillsNeeded = $data['skills_needed'] ?? [];
         $circlePhoto = $data['circle_photo_profile_url'] ?? null;
+        $groupMode = in_array($data['group_mode'] ?? 'none', ['circle', 'external', 'none'], true)
+            ? (string) $data['group_mode']
+            : 'none';
+        $communicationUrl = $groupMode === 'external'
+            ? ($data['communication_url'] ?? null)
+            : null;
 
         // Mulai transaksi atomik
         $pdo->beginTransaction();
@@ -59,8 +78,8 @@ class CollabModel
         try {
             // 1. Insert ke tabel collaborations
             $collabStmt = $pdo->prepare(
-                "INSERT INTO collaborations (id, user_id, title, description, required_member, status)
-                 VALUES (:id, :user_id, :title, :description, :required_member, :status)"
+                "INSERT INTO collaborations (id, user_id, title, description, type, due_date, required_member, status, communication_url)
+                 VALUES (:id, :user_id, :title, :description, :type, :due_date, :required_member, :status, :communication_url)"
             );
 
             $collabStmt->execute([
@@ -68,8 +87,11 @@ class CollabModel
                 ':user_id' => $userId,
                 ':title' => $title,
                 ':description' => $description,
+                ':type' => $type,
+                ':due_date' => $dueDate,
                 ':required_member' => $requiredMember,
                 ':status' => $status,
+                ':communication_url' => $communicationUrl,
             ]);
 
             // 2. Insert media ke tabel collab_media jika ada
@@ -144,12 +166,22 @@ class CollabModel
                 }
             }
 
-            // 4. Auto-create Circle yang terhubung dengan collaboration ini
-            CircleModel::create([
-                'collaboration_id' => $id,
-                'title' => $title,
-                'photo_profile_url' => $circlePhoto,
-            ], $pdo);
+            // 4. Circle hanya dibuat bila owner memilihnya di form
+            //    pembuatan (group_mode 'circle'). Mode 'external'
+            //    memakai link grup di luar aplikasi; mode 'none'
+            //    berarti owner belum memutuskan dan Circle masih
+            //    bisa dibuat belakangan lewat POST /api/collab/:id/circle.
+            if ($groupMode === 'circle') {
+                CircleModel::create([
+                    'collaboration_id' => $id,
+                    'title' => $title,
+                    'photo_profile_url' => $circlePhoto,
+                ], $pdo);
+            }
+
+            // 5. Owner adalah anggota pertama (accepted): collab baru
+            //    mulai dengan accepted_member_count = 1.
+            self::insertMember($pdo, $id, $userId);
 
             // Commit seluruh transaksi jika semua tahapan berhasil
             $pdo->commit();
@@ -174,9 +206,12 @@ class CollabModel
             'description' => $description,
             'required_member' => $requiredMember,
             'status' => $status,
+            'type' => $type,
+            'due_date' => $dueDate,
             'media_urls' => $mediaUrls,
             'media_public_ids' => $mediaPublicIds,
             'skills_needed' => $skillsNeeded,
+            'communication_url' => $communicationUrl,
         ];
     }
 
@@ -191,7 +226,7 @@ class CollabModel
         $pdo = getDB();
 
         // 1. Ambil data utama collaboration
-        $stmt = $pdo->prepare("SELECT * FROM collaborations WHERE id = :id LIMIT 1");
+        $stmt = $pdo->prepare("SELECT * FROM collaborations WHERE id = :id AND deleted_at IS NULL LIMIT 1");
         $stmt->execute([':id' => $id]);
         $collab = $stmt->fetch();
 
@@ -208,9 +243,7 @@ class CollabModel
         $mediaPublicIds = [];
         foreach ($mediaRows as $m) {
             $mediaUrls[] = $m['media_url'];
-            if ($m['media_public_id'] !== null) {
-                $mediaPublicIds[] = $m['media_public_id'];
-            }
+            $mediaPublicIds[] = $m['media_public_id'];
         }
 
         // 3. Ambil skills yang berelasi
@@ -227,16 +260,25 @@ class CollabModel
         // 4. Ambil circle yang berelasi
         $circle = CircleModel::findByCollaborationId($id, $pdo);
 
+        // 5. Hitung jumlah anggota resmi (owner sudah terhitung sejak create)
+        $acceptedMemberCount = self::countAcceptedMembers($id, $pdo);
+        $requiredMember = (int) $collab['required_member'];
+
         return [
             'id' => $collab['id'],
             'user_id' => $collab['user_id'],
             'title' => $collab['title'],
             'description' => $collab['description'],
             'required_member' => (int) $collab['required_member'],
+            'accepted_member_count' => $acceptedMemberCount,
+            'available_slots' => max(0, $requiredMember - $acceptedMemberCount),
             'status' => $collab['status'],
+            'type' => $collab['type'] ?? 'coursework',
+            'due_date' => $collab['due_date'],
             'media_urls' => $mediaUrls,
             'media_public_ids' => $mediaPublicIds,
             'skills_needed' => $skills,
+            'communication_url' => $collab['communication_url'] ?? null,
             'circle' => $circle,
             'created_at' => $collab['created_at'],
             'updated_at' => $collab['updated_at'],
@@ -259,24 +301,45 @@ class CollabModel
             c.id,
             c.user_id,
             c.title,
+            c.description,
+            c.type,
+            c.due_date,
             c.required_member,
             c.status,
+            c.created_at,
             u.username,
+            pr.full_name,
             pr.photo_profile_url
         FROM collaborations c
         LEFT JOIN users u
             ON c.user_id = u.id
         LEFT JOIN profiles pr
             ON c.user_id = pr.user_id
+        WHERE c.deleted_at IS NULL AND moderation_state = 'visible'
         ORDER BY c.created_at DESC
     ";
 
         $collabs = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
 
+        return self::hydrateList($collabs);
+    }
+
+    /**
+     * Melengkapi baris collaboration mentah (hasil SELECT utama + owner)
+     * dengan skills, jumlah anggota, dan shape response list.
+     * Dipakai bersama oleh getAll() dan getPage() supaya keduanya
+     * mengembalikan item yang identik.
+     *
+     * @param  array<int, array<string, mixed>> $collabs Baris mentah
+     * @return array<int, array<string, mixed>>
+     */
+    private static function hydrateList(array $collabs): array
+    {
         if (empty($collabs)) {
             return [];
         }
 
+        $pdo = getDB();
         $collabIds = array_column($collabs, 'id');
         $placeholders = implode(',', array_fill(0, count($collabIds), '?'));
 
@@ -341,6 +404,9 @@ class CollabModel
             $result[] = [
                 'id' => $cid,
                 'title' => $collab['title'],
+                'description' => $collab['description'] ?? '',
+                'type' => $collab['type'] ?? 'coursework',
+                'due_date' => $collab['due_date'],
                 'status' => $collab['status'],
                 'required_member' => $requiredMember,
                 'accepted_member_count' => $acceptedMemberCount,
@@ -352,14 +418,342 @@ class CollabModel
                 'owner' => [
                     'id' => $collab['user_id'],
                     'username' => $collab['username'] ?? '',
+                    'full_name' => $collab['full_name'] ?? '',
                     'photo_profile_url' =>
                         $collab['photo_profile_url']
                         ?? ProfileModel::DEFAULT_PHOTO_URL,
                 ],
+                'created_at' => $collab['created_at'] ?? null,
             ];
         }
 
         return $result;
+    }
+
+    /**
+     * Satu halaman list collaboration untuk GET /api/collab (audit P2-12).
+     * Mendukung pencarian (LIKE case-insensitive di title/description —
+     * collation MySQL default sudah case-insensitive) dan sort:
+     * newest = created_at DESC (default), oldest = created_at ASC,
+     * due = due_date ASC dengan null terakhir, tiebreak created_at DESC.
+     *
+     * Page/limit diasumsikan sudah divalidasi (clamp) oleh controller.
+     *
+     * @return array{data: array<int, array<string, mixed>>, pagination: array{page: int, limit: int, total: int, total_pages: int}}
+     */
+    public static function getPage(string $q, string $sort, int $page, int $limit): array
+    {
+        $pdo = getDB();
+
+        $where = 'WHERE c.deleted_at IS NULL AND moderation_state = \'visible\'';
+        $params = [];
+
+        $q = trim($q);
+        if ($q !== '') {
+            // Escape karakter wildcard LIKE supaya query user diperlakukan harfiah.
+            $escaped = str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $q);
+            $where .= ' AND (c.title LIKE ? OR c.description LIKE ?)';
+            $like = '%' . $escaped . '%';
+            $params[] = $like;
+            $params[] = $like;
+        }
+
+        $orderBy = match ($sort) {
+            'oldest' => 'ORDER BY c.created_at ASC',
+            'due' => 'ORDER BY c.due_date IS NULL ASC, c.due_date ASC, c.created_at DESC',
+            default => 'ORDER BY c.created_at DESC',
+        };
+
+        // Total baris (untuk pagination meta) — WHERE sama, tanpa LIMIT.
+        $countStmt = $pdo->prepare("
+            SELECT COUNT(*)
+            FROM collaborations c
+            $where
+        ");
+        $countStmt->execute($params);
+        $total = (int) $countStmt->fetchColumn();
+        $totalPages = $total === 0 ? 0 : (int) ceil($total / $limit);
+
+        $offset = ($page - 1) * $limit;
+        $listStmt = $pdo->prepare("
+            SELECT
+                c.id,
+                c.user_id,
+                c.title,
+                c.description,
+                c.type,
+                c.due_date,
+                c.required_member,
+                c.status,
+                c.created_at,
+                u.username,
+                pr.full_name,
+                pr.photo_profile_url
+            FROM collaborations c
+            LEFT JOIN users u
+                ON c.user_id = u.id
+            LEFT JOIN profiles pr
+                ON c.user_id = pr.user_id
+            $where
+            $orderBy
+            LIMIT ? OFFSET ?
+        ");
+        // LIMIT/OFFSET ikut di-execute sebagai int (pola yang sama dengan
+        // NotificationModel::getForUser) — native prepares PDO mengikatnya
+        // sebagai integer.
+        $listStmt->execute(array_merge($params, [$limit, $offset]));
+        $collabs = $listStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        return [
+            'data' => self::hydrateList($collabs),
+            'pagination' => [
+                'page' => $page,
+                'limit' => $limit,
+                'total' => $total,
+                'total_pages' => $totalPages,
+            ],
+        ];
+    }
+
+    /**
+     * Mengambil collaboration yang dimiliki user, yang user ikuti sebagai
+     * anggota, atau yang user ajukan (pending) — beserta myStatus untuk
+     * board My Collaborations. Powers GET /api/my-collaborations.
+     *
+     * @param  string $userId UUID user yang sedang login
+     * @return array<int, array<string, mixed>>
+     */
+    public static function getByMemberId(string $userId): array
+    {
+        $pdo = getDB();
+
+        $sql = "
+            SELECT
+                c.id,
+                c.user_id,
+                c.title,
+                c.description,
+                c.type,
+                c.due_date,
+                c.required_member,
+                c.status,
+                c.communication_url,
+                c.created_at,
+                CASE
+                    WHEN uc.status IS NOT NULL THEN uc.status
+                    WHEN ca.id IS NOT NULL THEN 'pending'
+                    ELSE 'not-started'
+                END AS my_status,
+                u.username,
+                pr.full_name,
+                pr.photo_profile_url
+            FROM collaborations c
+            LEFT JOIN user_collaboration uc
+                ON uc.collaboration_id = c.id AND uc.user_id = ?
+            LEFT JOIN collaboration_applications ca
+                ON ca.collab_id = c.id AND ca.user_id = ? AND ca.status = 'pending'
+            LEFT JOIN users u ON c.user_id = u.id
+            LEFT JOIN profiles pr ON c.user_id = pr.user_id
+            WHERE c.deleted_at IS NULL AND moderation_state = 'visible' AND (c.user_id = ? OR uc.user_id = ? OR ca.id IS NOT NULL)
+            ORDER BY c.created_at DESC
+        ";
+
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([$userId, $userId, $userId, $userId]);
+        $collabs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if (empty($collabs)) {
+            return [];
+        }
+
+        return self::enrichMemberCollabs($collabs);
+    }
+
+    /**
+     * Enrichment bersama untuk baris-baris getByMemberId:
+     * skills, jumlah + daftar member, dan media per collab.
+     */
+    private static function enrichMemberCollabs(array $collabs): array
+    {
+        $pdo = getDB();
+
+        $collabIds = array_column($collabs, 'id');
+        $placeholders = implode(',', array_fill(0, count($collabIds), '?'));
+
+        $skillsStmt = $pdo->prepare("
+            SELECT
+                cs.collab_id,
+                s.id,
+                s.skill_name,
+                s.scope
+            FROM collab_skills cs
+            JOIN skills s ON cs.skill_id = s.id
+            WHERE cs.collab_id IN ($placeholders)
+            ORDER BY s.skill_name ASC
+        ");
+        $skillsStmt->execute($collabIds);
+        $skillRows = $skillsStmt->fetchAll(PDO::FETCH_ASSOC);
+        $skillsMap = [];
+        foreach ($skillRows as $skill) {
+            $skillsMap[$skill['collab_id']][] = [
+                'id' => $skill['id'],
+                'skill_name' => $skill['skill_name'],
+                'scope' => $skill['scope'],
+            ];
+        }
+
+        $memberStmt = $pdo->prepare("
+            SELECT collaboration_id, COUNT(*) AS accepted_member_count
+            FROM user_collaboration
+            WHERE collaboration_id IN ($placeholders)
+            GROUP BY collaboration_id
+        ");
+        $memberStmt->execute($collabIds);
+        $memberRows = $memberStmt->fetchAll(PDO::FETCH_ASSOC);
+        $memberCountMap = [];
+        foreach ($memberRows as $member) {
+            $memberCountMap[$member['collaboration_id']] = (int) $member['accepted_member_count'];
+        }
+
+        // Daftar anggota diterima per collab (untuk Team di halaman
+        // detail) — satu query untuk semua collab, dikelompokkan per
+        // collaboration_id, urut waktu gabung.
+        $memberListStmt = $pdo->prepare("
+            SELECT uc.collaboration_id, u.id, u.username, pr.full_name, pr.photo_profile_url, uc.status AS work_status
+            FROM user_collaboration uc
+            JOIN users u ON u.id = uc.user_id
+            LEFT JOIN profiles pr ON pr.user_id = u.id
+            WHERE uc.collaboration_id IN ($placeholders)
+            ORDER BY uc.created_at ASC
+        ");
+        $memberListStmt->execute($collabIds);
+        $membersMap = [];
+        foreach ($memberListStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $membersMap[$row['collaboration_id']][] = [
+                'id' => $row['id'],
+                'username' => $row['username'] ?? '',
+                'full_name' => $row['full_name'] ?? '',
+                'work_status' => $row['work_status'] ?? 'not-started',
+                'photo_profile_url' => $row['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
+            ];
+        }
+
+        // Circle per collab (id saja; null bila owner belum
+        // membuatnya) — satu query batch seperti relasi lainnya.
+        $circleStmt = $pdo->prepare("
+            SELECT id, collaboration_id
+            FROM circle
+            WHERE collaboration_id IN ($placeholders)
+        ");
+        $circleStmt->execute($collabIds);
+        $circleMap = [];
+        foreach ($circleStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $circleMap[$row['collaboration_id']] = ['id' => $row['id']];
+        }
+
+        // Media per collab (untuk grid foto di detail
+        // My Collaborations) — satu query batch, urut waktu
+        // upload. media_public_ids selalu sejajar indeks
+        // dengan media_urls (null dipertahankan).
+        $mediaStmt = $pdo->prepare("
+            SELECT collab_id, media_url, media_public_id
+            FROM collab_media
+            WHERE collab_id IN ($placeholders)
+            ORDER BY created_at ASC
+        ");
+        $mediaStmt->execute($collabIds);
+        $mediaMap = [];
+        foreach ($mediaStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $mediaMap[$row['collab_id']]['urls'][] = $row['media_url'];
+            $mediaMap[$row['collab_id']]['public_ids'][] = $row['media_public_id'];
+        }
+
+        $result = [];
+        foreach ($collabs as $collab) {
+            $cid = $collab['id'];
+            $requiredMember = (int) $collab['required_member'];
+            $acceptedMemberCount = $memberCountMap[$cid] ?? 0;
+            $result[] = [
+                'id' => $cid,
+                'title' => $collab['title'],
+                'description' => $collab['description'] ?? '',
+                'type' => $collab['type'] ?? 'coursework',
+                'due_date' => $collab['due_date'],
+                'status' => $collab['status'],
+                'my_status' => $collab['my_status'],
+                'required_member' => $requiredMember,
+                'accepted_member_count' => $acceptedMemberCount,
+                'available_slots' => max(0, $requiredMember - $acceptedMemberCount),
+                'skills_needed' => $skillsMap[$cid] ?? [],
+                'media_urls' => $mediaMap[$cid]['urls'] ?? [],
+                'media_public_ids' => $mediaMap[$cid]['public_ids'] ?? [],
+                'members' => $membersMap[$cid] ?? [],
+                'circle' => $circleMap[$cid] ?? null,
+                'communication_url' => $collab['communication_url'] ?? null,
+                'owner' => [
+                    'id' => $collab['user_id'],
+                    'username' => $collab['username'] ?? '',
+                    'full_name' => $collab['full_name'] ?? '',
+                    'photo_profile_url' =>
+                        $collab['photo_profile_url']
+                        ?? ProfileModel::DEFAULT_PHOTO_URL,
+                ],
+                'created_at' => $collab['created_at'] ?? null,
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Satu proyek untuk GET /api/my-collaborations/:id (audit
+     * P1 #15): query yang sama dengan getByMemberId tetapi
+     * difilter ke satu collab; null bila user tidak terlibat.
+     */
+    public static function getOneByMemberId(string $userId, string $collabId): ?array
+    {
+        $pdo = getDB();
+
+        $sql = "
+            SELECT
+                c.id,
+                c.user_id,
+                c.title,
+                c.description,
+                c.type,
+                c.due_date,
+                c.required_member,
+                c.status,
+                c.communication_url,
+                c.created_at,
+                CASE
+                    WHEN uc.status IS NOT NULL THEN uc.status
+                    WHEN ca.id IS NOT NULL THEN 'pending'
+                    ELSE 'not-started'
+                END AS my_status,
+                u.username,
+                pr.full_name,
+                pr.photo_profile_url
+            FROM collaborations c
+            LEFT JOIN user_collaboration uc
+                ON uc.collaboration_id = c.id AND uc.user_id = ?
+            LEFT JOIN collaboration_applications ca
+                ON ca.collab_id = c.id AND ca.user_id = ? AND ca.status = 'pending'
+            LEFT JOIN users u ON c.user_id = u.id
+            LEFT JOIN profiles pr ON c.user_id = pr.user_id
+            WHERE c.deleted_at IS NULL AND moderation_state = 'visible' AND (c.user_id = ? OR uc.user_id = ? OR ca.id IS NOT NULL) AND c.id = ?
+        ";
+
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([$userId, $userId, $userId, $userId, $collabId]);
+        $collabs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if (empty($collabs)) {
+            return null;
+        }
+
+        $enriched = self::enrichMemberCollabs($collabs);
+        return $enriched[0] ?? null;
     }
 
     /**
@@ -379,18 +773,22 @@ class CollabModel
             c.user_id,
             c.title,
             c.description,
+            c.type,
+            c.due_date,
             c.required_member,
             c.status,
+            c.communication_url,
             c.created_at,
             c.updated_at,
             u.username,
+            pr.full_name,
             pr.photo_profile_url
         FROM collaborations c
         LEFT JOIN users u
             ON c.user_id = u.id
         LEFT JOIN profiles pr
             ON c.user_id = pr.user_id
-        WHERE c.id = :id
+        WHERE c.id = :id AND c.deleted_at IS NULL AND moderation_state = 'visible'
         LIMIT 1
     ");
 
@@ -462,6 +860,8 @@ class CollabModel
             'id' => $collab['id'],
             'title' => $collab['title'],
             'description' => $collab['description'],
+            'type' => $collab['type'] ?? 'coursework',
+            'due_date' => $collab['due_date'],
             'required_member' => $requiredMember,
             'accepted_member_count' => $acceptedMemberCount,
             'available_slots' => max(
@@ -472,10 +872,13 @@ class CollabModel
             'media_urls' => $mediaUrls,
             'media_public_ids' => $mediaPublicIds,
             'skills_needed' => $skills,
+            'communication_url' => $collab['communication_url'] ?? null,
+            'members' => self::acceptedMembers($id, $pdo),
             'circle' => $circle,
             'owner' => [
                 'id' => $collab['user_id'],
                 'username' => $collab['username'] ?? '',
+                'full_name' => $collab['full_name'] ?? '',
                 'photo_profile_url' =>
                     $collab['photo_profile_url']
                     ?? ProfileModel::DEFAULT_PHOTO_URL,
@@ -497,7 +900,7 @@ class CollabModel
 
         // 1. Ambil data user & profile
         $userStmt = $pdo->prepare("
-            SELECT u.id, u.username, pr.photo_profile_url 
+            SELECT u.id, u.username, pr.full_name, pr.photo_profile_url 
             FROM users u
             LEFT JOIN profiles pr ON u.id = pr.user_id
             WHERE u.id = :user_id
@@ -524,7 +927,7 @@ class CollabModel
                 c.created_at,
                 c.updated_at
             FROM collaborations c
-            WHERE c.user_id = :user_id
+            WHERE c.user_id = :user_id AND c.deleted_at IS NULL AND moderation_state = 'visible'
             ORDER BY c.created_at DESC
         ");
         $collabStmt->execute([':user_id' => $userId]);
@@ -617,12 +1020,14 @@ class CollabModel
                     'id' => $user['id'],
                     '_id' => $user['id'],
                     'username' => $user['username'],
+                    'full_name' => $user['full_name'] ?? '',
                     'photo_profile_url' => $photoProfile,
                 ],
                 'user_id' => [
                     'id' => $user['id'],
                     '_id' => $user['id'],
                     'username' => $user['username'],
+                    'full_name' => $user['full_name'] ?? '',
                     'photo_profile_url' => $photoProfile,
                 ],
                 'title' => $c['title'],
@@ -648,32 +1053,423 @@ class CollabModel
     }
 
     /**
-     * Menghapus postingan kolaborasi berdasarkan ID.
-     * Menggunakan transaction PDO. Foreign key CASCADE pada InnoDB secara otomatis
-     * menghapus relasi pada tabel collab_media, collab_skills, circle, zone,
-     * zone_messages, collaboration_applications, dan user_collaboration.
+     * Soft delete postingan kolaborasi berdasarkan ID: set deleted_at = NOW().
+     * Row tetap ada
+     * di database (bisa di-restore / diaudit); relasi (collab_media,
+     * collab_skills, circle, zone, applications, user_collaboration)
+     * TIDAK dihapus.
      *
      * @param  string $id UUID collaboration
      * @return bool True jika berhasil dihapus
-     * @throws Throwable Jika operasi gagal (otomatis rollback)
      */
+    /**
+     * Status aplikasi di DB vs API.
+     *
+     * Kolom `collaboration_applications.status` adalah ENUM
+     * ('pending','accepted','rejected') - tidak ada nilai 'declined'.
+     * API mengekspos penolakan sebagai 'declined', jadi mapping ini
+     * dipakai di semua payload aplikasi yang keluar.
+     *
+     * @param  string $dbStatus Nilai status apa adanya dari database
+     * @return string Status yang diekspos ke API
+     */
+    public static function mapApplicationStatus(string $dbStatus): string
+    {
+        return $dbStatus === 'rejected' ? 'declined' : $dbStatus;
+    }
+
+    /**
+     * Jumlah anggota diterima (accepted) sebuah kolaborasi.
+     *
+     * Satu row di `user_collaboration` = satu anggota diterima; pelamar
+     * pending hanya ada di `collaboration_applications` dan tidak pernah
+     * masuk tabel ini, jadi COUNT(*) di sini sudah menghitung accepted
+     * saja. Kolom `status` di user_collaboration adalah progres tugas
+     * member (not-started/pending/complete/revise), BUKAN flag
+     * penerimaan - tidak ada filter status yang benar untuk dipakai.
+     *
+     * @param  string   $collabId UUID collaboration
+     * @param  PDO|null $pdo      Koneksi (dipakai saat di dalam transaksi)
+     * @return int Jumlah anggota diterima
+     */
+    /**
+     * Daftar anggota diterima (baris user_collaboration) beserta
+     * profil singkatnya, urut waktu gabung. Dipakai payload detail
+     * supaya Team menampilkan orang beneran, bukan cuma hitungan.
+     *
+     * @param  string   $collabId UUID collaboration
+     * @param  PDO|null $pdo      Koneksi (dipakai saat di dalam transaksi)
+     * @return array<int, array{id: string, username: string, full_name: string, photo_profile_url: string}>
+     */
+    public static function acceptedMembers(string $collabId, ?PDO $pdo = null): array
+    {
+        $pdo ??= getDB();
+        $stmt = $pdo->prepare("
+            SELECT u.id, u.username, pr.full_name, pr.photo_profile_url
+            FROM user_collaboration uc
+            JOIN users u ON u.id = uc.user_id
+            LEFT JOIN profiles pr ON pr.user_id = u.id
+            WHERE uc.collaboration_id = :id
+            ORDER BY uc.created_at ASC
+        ");
+        $stmt->execute([':id' => $collabId]);
+        $members = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $members[] = [
+                'id' => $row['id'],
+                'username' => $row['username'] ?? '',
+                'full_name' => $row['full_name'] ?? '',
+                'photo_profile_url' => $row['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
+            ];
+        }
+        return $members;
+    }
+
+    /**
+     * Status aplikasi satu user di banyak collab sekaligus (untuk
+     * payload daftar: tombol Apply di kartu berubah mengikuti
+     * status ini). Satu query per halaman, bukan per kartu.
+     *
+     * @param  string   $userId    UUID user yang login
+     * @param  string[] $collabIds UUID collab dalam satu halaman
+     * @return array<string, string> Map collab_id => status API
+     */
+    public static function applicationStatusesForUser(string $userId, array $collabIds): array
+    {
+        if ($collabIds === []) {
+            return [];
+        }
+        $pdo = getDB();
+        $placeholders = implode(',', array_fill(0, count($collabIds), '?'));
+        $stmt = $pdo->prepare("
+            SELECT collab_id, status
+            FROM collaboration_applications
+            WHERE user_id = ? AND collab_id IN ($placeholders)
+        ");
+        $stmt->execute([$userId, ...$collabIds]);
+        $map = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $map[$row['collab_id']] = self::mapApplicationStatus($row['status']);
+        }
+        return $map;
+    }
+
+    public static function countAcceptedMembers(string $collabId, ?PDO $pdo = null): int
+    {
+        $pdo ??= getDB();
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM user_collaboration WHERE collaboration_id = :id");
+        $stmt->execute([':id' => $collabId]);
+        return (int) $stmt->fetchColumn();
+    }
+
+    /**
+     * Apakah user sudah menjadi anggota diterima di collab ini.
+     *
+     * @param  string $collabId UUID collaboration
+     * @param  string $userId   UUID user
+     * @return bool True jika ada row di user_collaboration
+     */
+    public static function isMember(string $collabId, string $userId): bool
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare("SELECT 1 FROM user_collaboration WHERE collaboration_id = :collab_id AND user_id = :user_id LIMIT 1");
+        $stmt->execute([':collab_id' => $collabId, ':user_id' => $userId]);
+        return (bool) $stmt->fetchColumn();
+    }
+
+    /**
+     * Kunci row collab untuk penulisan yang mengubah kursi (apply/accept).
+     * Wajib dipanggil di dalam transaksi; row lock ini membuat
+     * pengecekan "penuh" di semua request untuk collab yang sama
+     * berjalan berurutan sehingga kursi tidak bisa overbooked.
+     *
+     * @param  PDO    $pdo Koneksi transaksi
+     * @param  string $id  UUID collaboration
+     * @return array<string, mixed>|null Row collab atau null jika tidak ada / soft-deleted
+     */
+    public static function lockCollabForMembership(PDO $pdo, string $id): ?array
+    {
+        $stmt = $pdo->prepare("SELECT id, user_id, required_member FROM collaborations WHERE id = :id AND deleted_at IS NULL LIMIT 1 FOR UPDATE");
+        $stmt->execute([':id' => $id]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ?: null;
+    }
+
+    /**
+     * Owner menandai proyek selesai: status publik -> completed
+     * dan SELURUH baris member -> 'complete' (board tiap member
+     * memindahkan kartunya ke kolom Complete). Dipanggil di dalam
+     * transaksi milik controller.
+     */
+    public static function completeProject(PDO $pdo, string $collabId): void
+    {
+        $stmt = $pdo->prepare("UPDATE collaborations SET status = 'completed' WHERE id = ?");
+        $stmt->execute([$collabId]);
+        $stmt = $pdo->prepare("UPDATE user_collaboration SET status = 'complete' WHERE collaboration_id = ?");
+        $stmt->execute([$collabId]);
+    }
+
+    /**
+     * Kebalikan completeProject: status publik -> in-progress dan
+     * baris member yang 'complete' kembali ke 'not-started'.
+     * Baris 'revise' tidak disentuh (masih menunggu pengerjaan ulang).
+     */
+    public static function reopenProject(PDO $pdo, string $collabId): void
+    {
+        $stmt = $pdo->prepare("UPDATE collaborations SET status = 'in-progress' WHERE id = ?");
+        $stmt->execute([$collabId]);
+        $stmt = $pdo->prepare("UPDATE user_collaboration SET status = 'not-started' WHERE collaboration_id = ? AND status = 'complete'");
+        $stmt->execute([$collabId]);
+    }
+
+    /**
+     * Owner mengatur status kerja satu member. False jika user
+     * tersebut bukan member (tidak ada baris user_collaboration).
+     * Member yang ditandai belum selesai pada proyek berstatus
+     * completed membuka lagi proyeknya: status publik tidak boleh
+     * tetap 'completed' saat ada member di Active/Revise.
+     */
+    public static function setMemberWorkStatus(PDO $pdo, string $collabId, string $memberId, string $status): bool
+    {
+        $stmt = $pdo->prepare("UPDATE user_collaboration SET status = ? WHERE collaboration_id = ? AND user_id = ?");
+        $stmt->execute([$status, $collabId, $memberId]);
+        if ($stmt->rowCount() === 0) {
+            return false;
+        }
+        if ($status !== 'complete') {
+            $fix = $pdo->prepare("UPDATE collaborations SET status = 'in-progress' WHERE id = ? AND status = 'completed'");
+            $fix->execute([$collabId]);
+        }
+        return true;
+    }
+
+    /**
+     * Masukkan anggota diterima. Dipakai saat create (owner) dan accept.
+     * Status member default 'not-started' (progres tugas, bukan penerimaan).
+     *
+     * @param  PDO    $pdo      Koneksi transaksi
+     * @param  string $collabId UUID collaboration
+     * @param  string $userId   UUID user
+     * @return void
+     */
+    public static function insertMember(PDO $pdo, string $collabId, string $userId): void
+    {
+        $stmt = $pdo->prepare(
+            "INSERT INTO user_collaboration (id, user_id, collaboration_id)
+             VALUES (:id, :user_id, :collaboration_id)"
+        );
+        $stmt->execute([
+            ':id' => self::generateUuid(),
+            ':user_id' => $userId,
+            ':collaboration_id' => $collabId,
+        ]);
+    }
+
+    /**
+     * Bentuk payload API untuk satu row collaboration_applications.
+     *
+     * @param  array<string, mixed> $row Row apa adanya dari database
+     * @return array<string, mixed> Row dengan status versi API
+     */
+    private static function presentApplication(array $row): array
+    {
+        return [
+            'id' => $row['id'],
+            'collaboration_id' => $row['collab_id'],
+            'user_id' => $row['user_id'],
+            'status' => self::mapApplicationStatus((string) $row['status']),
+            'message' => $row['message'],
+            'created_at' => $row['created_at'],
+        ];
+    }
+
+    /**
+     * Satu aplikasi user di satu collab (UNIQUE user_id+collab_id,
+     * jadi maksimal satu row per pasangan).
+     *
+     * @param  string $collabId UUID collaboration
+     * @param  string $userId   UUID user
+     * @return array<string, mixed>|null Aplikasi atau null jika belum pernah apply
+     */
+    public static function findApplication(string $collabId, string $userId): ?array
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare("SELECT id, collab_id, user_id, message, status, created_at FROM collaboration_applications WHERE collab_id = :collab_id AND user_id = :user_id LIMIT 1");
+        $stmt->execute([':collab_id' => $collabId, ':user_id' => $userId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$row) {
+            return null;
+        }
+        return self::presentApplication($row);
+    }
+
+    /**
+     * Satu aplikasi berdasarkan id-nya di dalam satu collab.
+     *
+     * @param  string $collabId      UUID collaboration
+     * @param  string $applicationId UUID application
+     * @return array<string, mixed>|null Aplikasi atau null jika tidak ada
+     */
+    public static function findApplicationById(string $collabId, string $applicationId): ?array
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare("SELECT id, collab_id, user_id, message, status, created_at FROM collaboration_applications WHERE id = :id AND collab_id = :collab_id LIMIT 1");
+        $stmt->execute([':id' => $applicationId, ':collab_id' => $collabId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$row) {
+            return null;
+        }
+        return self::presentApplication($row);
+    }
+
+    /**
+     * Buat aplikasi baru berstatus pending.
+     *
+     * @param  string      $collabId UUID collaboration
+     * @param  string      $userId   UUID pelamar
+     * @param  string|null $message  Pesan lamaran (opsional)
+     * @return array<string, mixed> Aplikasi yang baru dibuat
+     */
+    public static function createApplication(string $collabId, string $userId, ?string $message): array
+    {
+        $pdo = getDB();
+        $id = self::generateUuid();
+        $stmt = $pdo->prepare("INSERT INTO collaboration_applications (id, user_id, collab_id, message, status) VALUES (:id, :user_id, :collab_id, :message, 'pending')");
+        $stmt->execute([':id' => $id, ':user_id' => $userId, ':collab_id' => $collabId, ':message' => $message]);
+        $created = self::findApplicationById($collabId, $id);
+        if ($created !== null) {
+            return $created;
+        }
+        return [
+            'id' => $id,
+            'collaboration_id' => $collabId,
+            'user_id' => $userId,
+            'status' => 'pending',
+            'message' => $message,
+            'created_at' => null,
+        ];
+    }
+
+    /**
+     * Apply ulang setelah ditolak: baris lama (UNIQUE user_id+collab_id)
+     * tidak bisa diduplikasi, jadi statusnya dikembalikan ke pending.
+     *
+     * @param  string      $collabId UUID collaboration
+     * @param  string      $userId   UUID pelamar
+     * @param  string|null $message  Pesan lamaran baru (opsional, null = pertahankan yang lama)
+     * @return array<string, mixed> Aplikasi setelah dibuka ulang
+     */
+    public static function reopenApplication(string $collabId, string $userId, ?string $message): array
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare("UPDATE collaboration_applications SET status = 'pending', message = COALESCE(:message, message) WHERE collab_id = :collab_id AND user_id = :user_id");
+        $stmt->execute([':message' => $message, ':collab_id' => $collabId, ':user_id' => $userId]);
+        $reopened = self::findApplication($collabId, $userId);
+        if ($reopened !== null) {
+            return $reopened;
+        }
+        return [
+            'id' => '',
+            'collaboration_id' => $collabId,
+            'user_id' => $userId,
+            'status' => 'pending',
+            'message' => $message,
+            'created_at' => null,
+        ];
+    }
+
+    /**
+     * Daftar aplikasi satu collab untuk owner. Urutan: pending dulu
+     * (paling lama menunggu paling atas), lalu yang sudah diputuskan.
+     *
+     * @param  string $collabId UUID collaboration
+     * @return array<int, array<string, mixed>>
+     */
+    public static function listApplications(string $collabId): array
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare(
+            "SELECT ca.id, ca.user_id, u.username, pr.full_name, pr.photo_profile_url, ca.message, ca.status, ca.created_at
+             FROM collaboration_applications ca
+             JOIN users u ON u.id = ca.user_id
+             LEFT JOIN profiles pr ON pr.user_id = ca.user_id
+             WHERE ca.collab_id = :collab_id
+             ORDER BY (ca.status = 'pending') DESC, ca.created_at ASC"
+        );
+        $stmt->execute([':collab_id' => $collabId]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $result = [];
+        foreach ($rows as $row) {
+            $result[] = [
+                'id' => $row['id'],
+                'user_id' => $row['user_id'],
+                'username' => $row['username'] ?? '',
+                'full_name' => $row['full_name'] ?? '',
+                'photo_profile_url' => $row['photo_profile_url'] ?? ProfileModel::DEFAULT_PHOTO_URL,
+                'message' => $row['message'],
+                'status' => self::mapApplicationStatus((string) $row['status']),
+                'created_at' => $row['created_at'],
+            ];
+        }
+        return $result;
+    }
+
+    /**
+     * Ubah aplikasi pending menjadi accepted. Kondisi status='pending'
+     * di WHERE membuat flip ini atomik: kalau row sudah diputuskan
+     * duluan oleh request lain, tidak ada baris yang berubah.
+     *
+     * @param  PDO    $pdo           Koneksi transaksi
+     * @param  string $collabId      UUID collaboration
+     * @param  string $applicationId UUID application
+     * @return bool True jika satu baris berhasil diubah
+     */
+    public static function acceptApplicationRow(PDO $pdo, string $collabId, string $applicationId): bool
+    {
+        $stmt = $pdo->prepare("UPDATE collaboration_applications SET status = 'accepted' WHERE id = :id AND collab_id = :collab_id AND status = 'pending'");
+        $stmt->execute([':id' => $applicationId, ':collab_id' => $collabId]);
+        return $stmt->rowCount() > 0;
+    }
+
+    /**
+     * Tarik aplikasi pending milik pelamar sendiri: status menjadi
+     * 'withdrawn'. Filter status di WHERE membuat flip ini atomik.
+     *
+     * @param  string $collabId UUID collaboration
+     * @param  string $userId   UUID pelamar
+     * @return bool True jika satu baris berhasil diubah
+     */
+    public static function withdrawApplicationRow(string $collabId, string $userId): bool
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare("UPDATE collaboration_applications SET status = 'withdrawn' WHERE collab_id = :collab_id AND user_id = :user_id AND status = 'pending'");
+        $stmt->execute([':collab_id' => $collabId, ':user_id' => $userId]);
+        return $stmt->rowCount() > 0;
+    }
+
+    /**
+     * Ubah aplikasi pending menjadi rejected (diekspos sebagai 'declined').
+     * Sama atomiknya dengan acceptApplicationRow.
+     *
+     * @param  string $collabId      UUID collaboration
+     * @param  string $applicationId UUID application
+     * @return bool True jika satu baris berhasil diubah
+     */
+    public static function declineApplicationRow(string $collabId, string $applicationId): bool
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare("UPDATE collaboration_applications SET status = 'rejected' WHERE id = :id AND collab_id = :collab_id AND status = 'pending'");
+        $stmt->execute([':id' => $applicationId, ':collab_id' => $collabId]);
+        return $stmt->rowCount() > 0;
+    }
+
+
     public static function delete(string $id): bool
     {
         $pdo = getDB();
-        $pdo->beginTransaction();
-
-        try {
-            $stmt = $pdo->prepare("DELETE FROM collaborations WHERE id = :id");
-            $result = $stmt->execute([':id' => $id]);
-
-            $pdo->commit();
-            return $result;
-        } catch (Throwable $e) {
-            if ($pdo->inTransaction()) {
-                $pdo->rollBack();
-            }
-            throw $e;
-        }
+        $stmt = $pdo->prepare("UPDATE collaborations SET deleted_at = NOW() WHERE id = :id AND deleted_at IS NULL");
+        return $stmt->execute([':id' => $id]);
     }
 
     /**
@@ -699,4 +1495,5 @@ class CollabModel
         $data[8] = chr(ord($data[8]) & 0x3f | 0x80); // variant RFC 4122
         return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
     }
+
 }

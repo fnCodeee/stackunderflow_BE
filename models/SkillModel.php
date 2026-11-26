@@ -50,9 +50,13 @@ class SkillModel
      *
      * Aturan:
      *  - scope dan created_by ditentukan backend (bukan dari request).
-     *  - Nama skill boleh sama dengan skill system atau milik user lain.
+     *  - Nama skill TIDAK boleh sama (case-insensitive) dengan skill
+     *    system: skill standar sudah tersedia untuk semua user, jadi
+     *    salinan private-nya hanya membuat daftar ganda.
      *  - Nama skill TIDAK boleh duplikat untuk user yang sama (scope='private',
      *    created_by = user tersebut).
+     *  - Nama skill boleh sama dengan skill private milik user lain
+     *    (tidak terlihat oleh user ini, namespace tetap per-user).
      *
      * @param  string $skillName Nama skill (sudah divalidasi di controller)
      * @param  string $userId    UUID user yang sedang login
@@ -64,20 +68,27 @@ class SkillModel
     {
         $pdo = getDB();
 
-        // Cegah duplikasi nama skill private milik user yang sama
+        // Cegah duplikasi nama: skill system ATAU skill private
+        // milik user yang sama, dibandingkan case-insensitive.
         $dupStmt = $pdo->prepare(
-            "SELECT COUNT(*) FROM skills
-             WHERE skill_name = :skill_name
-               AND scope = 'private'
-               AND created_by = :user_id"
+            "SELECT scope FROM skills
+             WHERE LOWER(skill_name) = LOWER(:skill_name)
+               AND (scope = 'system' OR created_by = :user_id)
+             ORDER BY scope ASC
+             LIMIT 1"
         );
         $dupStmt->execute([
             ':skill_name' => $skillName,
             ':user_id'    => $userId,
         ]);
 
-        if ((int)$dupStmt->fetchColumn() > 0) {
-            throw new InvalidArgumentException('Skill dengan nama tersebut sudah dimiliki');
+        $dupScope = $dupStmt->fetchColumn();
+        if ($dupScope !== false) {
+            throw new InvalidArgumentException(
+                $dupScope === 'system'
+                    ? 'Skill tersebut sudah tersedia sebagai skill standar'
+                    : 'Skill dengan nama tersebut sudah dimiliki'
+            );
         }
 
         $id = self::generateUuid();
@@ -104,6 +115,17 @@ class SkillModel
             'scope'      => 'private',
             'created_by' => $userId,
         ];
+    }
+
+    /** Jumlah skill pribadi milik seorang user (untuk batas SkillGuard). */
+    public static function countPrivateForUser(string $userId): int
+    {
+        $pdo = getDB();
+        $stmt = $pdo->prepare(
+            "SELECT COUNT(*) FROM skills WHERE scope = 'private' AND created_by = :user_id"
+        );
+        $stmt->execute([':user_id' => $userId]);
+        return (int)$stmt->fetchColumn();
     }
 
     /**
@@ -151,6 +173,9 @@ class SkillModel
 
     /**
      * Mengecek apakah skill masih digunakan oleh relasi collab_skills.
+     * Hanya menghitung referensi dari kolaborasi yang masih aktif
+     * (deleted_at IS NULL): skill yang hanya dipakai kolaborasi yang
+     * sudah di-soft-delete dianggap tidak dipakai dan boleh dihapus.
      *
      * @param  string $skillId
      * @return int Jumlah record di collab_skills yang mereferensikan skill ini
@@ -160,7 +185,9 @@ class SkillModel
         $pdo = getDB();
 
         $stmt = $pdo->prepare(
-            "SELECT COUNT(*) FROM collab_skills WHERE skill_id = :skill_id"
+            "SELECT COUNT(*) FROM collab_skills cs
+             JOIN collaborations c ON cs.collab_id = c.id
+             WHERE cs.skill_id = :skill_id AND c.deleted_at IS NULL"
         );
         $stmt->execute([':skill_id' => $skillId]);
 

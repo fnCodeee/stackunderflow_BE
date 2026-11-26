@@ -43,22 +43,37 @@ class Response
      * @param  int     $statusCode  HTTP status code (200, 201, 400, 401, 403, 404, 500)
      * @param  string  $message     Pesan yang menjelaskan hasil operasi
      * @param  bool    $success     Status sukses atau gagal
+     * @param  array|null $pagination Metadata pagination {page, limit, total, total_pages}
+     *                              — hanya dikirim (sebagai key `pagination`) bila
+     *                              tidak null, supaya envelope endpoint lain tidak berubah.
      * @return never                Selalu exit setelah mengirim response
      */
     public static function json(
         mixed  $data       = null,
         int    $statusCode = 200,
         string $message    = '',
-        bool   $success    = true
+        bool   $success    = true,
+        ?array $pagination = null,
+        ?string $errorCode = null
     ): never {
         http_response_code($statusCode);
         header('Content-Type: application/json; charset=utf-8');
 
-        echo json_encode([
+        $payload = [
             'success' => $success,
             'message' => $message,
             'data'    => $data,
-        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        ];
+        if ($pagination !== null) {
+            $payload['pagination'] = $pagination;
+        }
+        if ($errorCode !== null) {
+            // Kode error mesin (audit P1 #17): frontend menerjemahkan
+            // kode ini; `message` tetap ada sebagai fallback.
+            $payload['code'] = $errorCode;
+        }
+
+        echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
         exit();
     }

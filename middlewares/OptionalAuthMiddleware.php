@@ -44,6 +44,15 @@ class OptionalAuthMiddleware
         try {
             $decoded = JWT::decode($token);
             $GLOBALS['user'] = $decoded;
+
+            // Akun disuspend diperlakukan sebagai tamu di route publik.
+            require_once BASE_PATH . '/models/UserModel.php';
+            $optAccount = UserModel::findById((string) ($decoded['id'] ?? ''));
+            if ($optAccount !== null && ($optAccount['account_status'] ?? 'active') === 'suspended') {
+                $GLOBALS['user'] = null;
+            } elseif ($optAccount !== null) {
+                $GLOBALS['user']['role'] = $optAccount['role'] ?? 'user';
+            }
         } catch (Throwable $e) {
             $GLOBALS['user'] = null;
         }

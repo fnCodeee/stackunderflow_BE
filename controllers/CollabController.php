@@ -13,14 +13,20 @@
 declare(strict_types=1);
 
 require_once BASE_PATH . '/models/CollabModel.php';
+require_once BASE_PATH . '/models/InboxModel.php';
+require_once BASE_PATH . '/models/NotificationModel.php';
 require_once BASE_PATH . '/models/SkillModel.php';
+require_once BASE_PATH . '/models/AiModerationService.php';
 require_once BASE_PATH . '/utils/Response.php';
 
 class CollabController
 {
     /**
      * Handler untuk POST /api/collab
-     * Membuat postingan kolaborasi baru beserta media, skills, dan otomatis membuat satu circle.
+     * Membuat postingan kolaborasi baru beserta media dan skills.
+     * Circle hanya dibuat bila owner memilih group_mode 'circle'
+     * (keputusan 2026-11-18); mode 'external' menyimpan link grup
+     * eksternal di communication_url.
      *
      * @param  array<string, string> $params Path parameters dari Router
      * @return void
@@ -48,10 +54,14 @@ class CollabController
 
             $title          = trim((string)($body['title'] ?? ''));
             $description    = trim((string)($body['description'] ?? ''));
+            $type           = $body['type'] ?? null;
+            $dueDate        = $body['due_date'] ?? $body['dueDate'] ?? null;
             $requiredMember = $body['required_member'] ?? $body['requiredMember'] ?? null;
             $mediaUrls      = $body['media_urls'] ?? $body['mediaUrls'] ?? [];
             $mediaPublicIds = $body['media_public_ids'] ?? $body['mediaPublicIds'] ?? [];
             $skillsNeeded   = $body['skills_needed'] ?? $body['skillsNeeded'] ?? null;
+            $groupMode      = strtolower(trim((string)($body['group_mode'] ?? $body['groupMode'] ?? 'none')));
+            $communicationUrl = trim((string)($body['communication_url'] ?? $body['communicationUrl'] ?? ''));
 
             // 2. Validasi field wajib sesuai baseline Express (kecuali communicationUrl yang sudah deprecated)
             if (
@@ -67,13 +77,49 @@ class CollabController
             }
 
             $requiredMemberInt = (int)$requiredMember;
-            if ($requiredMemberInt < 1) {
-                Response::json(null, 400, 'Seluruh Kolom wajib diisi.', false);
+            if ($requiredMemberInt < 1 || $requiredMemberInt > 10) {
+                Response::json(null, 400, 'requiredMember harus angka 1-10', false);
+            }
+
+            // 2b. Pilihan ruang grup owner (keputusan 2026-11-18):
+            // 'circle' membuat Circle bawaan aplikasi, 'external'
+            // menyimpan link grup chat eksternal (WhatsApp/Telegram/
+            // Discord/dll), 'none' berarti owner belum memutuskan.
+            if (!in_array($groupMode, ['circle', 'external', 'none'], true)) {
+                Response::json(null, 400, 'group_mode tidak valid', false);
+            }
+            if ($groupMode === 'external') {
+                if ($communicationUrl === '') {
+                    Response::json(null, 400, 'Link grup eksternal wajib diisi.', false);
+                }
+                $urlScheme = strtolower((string)(parse_url($communicationUrl, PHP_URL_SCHEME) ?? ''));
+                if (
+                    strlen($communicationUrl) > 255 ||
+                    filter_var($communicationUrl, FILTER_VALIDATE_URL) === false ||
+                    !in_array($urlScheme, ['http', 'https'], true)
+                ) {
+                    Response::json(null, 400, 'Format link grup eksternal tidak valid.', false);
+                }
+            }
+
+            // Validasi due_date: tidak boleh di masa lalu (bandingkan tanggal saja)
+            if ($dueDate !== null && $dueDate !== '') {
+                $dueTimestamp = strtotime((string)$dueDate);
+                if ($dueTimestamp === false) {
+                    Response::json(null, 400, 'Format due_date tidak valid', false);
+                }
+                if (date('Y-m-d', $dueTimestamp) < date('Y-m-d')) {
+                    Response::json(null, 400, 'due_date tidak boleh di masa lalu', false);
+                }
             }
 
             // 3. Validasi konsistensi jumlah mediaUrls dan mediaPublicIds jika mediaPublicIds dikirim
             if (is_array($mediaPublicIds) && count($mediaPublicIds) > 0 && count($mediaUrls) !== count($mediaPublicIds)) {
                 Response::json(null, 400, 'Count of mediaUrls and mediaPublicIds must be same!', false);
+            }
+            // Media harus berasal dari Cloudinary sendiri (folder underflow)
+            if (is_array($mediaUrls) && count($mediaUrls) > 0) {
+                UploadController::assertValidMedia(array_values($mediaUrls), is_array($mediaPublicIds) ? array_values($mediaPublicIds) : []);
             }
 
             // 4. Validasi format dan keberadaan skills di tabel master skills
@@ -113,16 +159,25 @@ class CollabController
                 Response::json(null, 400, $skillValidationError, false);
             }
 
-            // 5. Simpan ke database melalui CollabModel dalam transaksi atomik (collab + media + skills + circle)
+            // 5. Simpan ke database melalui CollabModel dalam transaksi atomik (collab + media + skills, plus circle bila dipilih)
             $result = CollabModel::create([
                 'user_id'          => $userId,
                 'title'            => $title,
                 'description'      => $description,
+                'type'             => $type,
+                'due_date'         => $dueDate,
                 'required_member'  => $requiredMemberInt,
                 'media_urls'       => is_array($mediaUrls) ? array_values($mediaUrls) : [],
                 'media_public_ids' => is_array($mediaPublicIds) ? array_values($mediaPublicIds) : [],
                 'skills_needed'    => $uniqueSkillIds,
+                'group_mode'       => $groupMode,
+                'communication_url' => $groupMode === 'external' ? $communicationUrl : null,
             ]);
+
+            // AI Moderator: antrekan kolaborasi baru untuk diperiksa.
+            if (is_array($result) && !empty($result['id'])) {
+                AiModerationService::enqueue('collab', (string) $result['id'], 'new_content');
+            }
 
             Response::json($result, 200, 'Collaboration created successfully', true);
         } catch (InvalidArgumentException $e) {
@@ -146,7 +201,20 @@ class CollabController
 
     /**
      * Handler untuk GET /api/collab
-     * Mengambil semua postingan kolaborasi beserta info pemilik, media, skills, dan circle.
+     * List postingan kolaborasi dengan pagination + search + sort (audit P2-12).
+     *
+     * Query params:
+     *  - page  (default 1): halaman yang diminta.
+     *  - limit (default 12): item per halaman.
+     *  - q     (default ''): cari di title/description (LIKE case-insensitive).
+     *  - sort  (default newest): newest | oldest | due.
+     *
+     * Validasi page/limit memakai CLAMP, bukan 400: nilai di luar rentang
+     * dijepit (page < 1 → 1, limit < 1 → 1, limit > 50 → 50; bukan angka →
+     * default). List endpoint bersifat read-only — parameter jelek tidak
+     * boleh membuat seluruh halaman gagal. Sort di luar daftar → newest.
+     * Response mempertahankan envelope {success, message, data} dan
+     * menambah `pagination: {page, limit, total, total_pages}`.
      *
      * @param  array<string, string> $params Path parameters dari Router
      * @return void
@@ -154,14 +222,49 @@ class CollabController
     public static function showCollab(array $params = []): void
     {
         try {
-            $userId = $GLOBALS['user']['id'] ?? null;
+            // Public listing: readable without a token (OptionalAuth).
+            $pageRaw = $_GET['page'] ?? null;
+            $limitRaw = $_GET['limit'] ?? null;
+            $page = $pageRaw !== null && filter_var($pageRaw, FILTER_VALIDATE_INT) !== false
+                ? max(1, (int) $pageRaw)
+                : 1;
+            $limit = $limitRaw !== null && filter_var($limitRaw, FILTER_VALIDATE_INT) !== false
+                ? min(50, max(1, (int) $limitRaw))
+                : 12;
 
-            if (!$userId) {
-                Response::json(null, 401, 'Unauthorized', false);
+            $q = trim((string) ($_GET['q'] ?? ''));
+
+            $sort = (string) ($_GET['sort'] ?? 'newest');
+            if (!in_array($sort, ['newest', 'oldest', 'due'], true)) {
+                $sort = 'newest';
             }
 
-            $collabs = CollabModel::getAll();
-            Response::json($collabs, 200, 'Get All Posts Collaboration!', true);
+            $pageResult = CollabModel::getPage($q, $sort, $page, $limit);
+
+            // my_application per item untuk user login (null kalau
+            // tidak login / belum pernah apply) — kartu di daftar
+            // menampilkan Pending / Joined, bukan tombol Apply lagi.
+            $myUserId = $GLOBALS['user']['id'] ?? null;
+            if ($myUserId !== null && $pageResult['data'] !== []) {
+                $statusMap = CollabModel::applicationStatusesForUser(
+                    (string) $myUserId,
+                    array_column($pageResult['data'], 'id')
+                );
+                foreach ($pageResult['data'] as &$item) {
+                    $item['my_application'] = isset($statusMap[$item['id']])
+                        ? ['status' => $statusMap[$item['id']]]
+                        : null;
+                }
+                unset($item);
+            }
+
+            Response::json(
+                $pageResult['data'],
+                200,
+                'Get All Posts Collaboration!',
+                true,
+                $pageResult['pagination']
+            );
         } catch (Throwable $e) {
             error_log('[COLLAB ERROR] ' . $e->getMessage());
             Response::json(null, 500, 'Terjadi kesalahan pada server saat mengambil data kolaborasi', false);
@@ -178,12 +281,7 @@ class CollabController
     public static function getCollabDetail(array $params = []): void
     {
         try {
-            $userId = $GLOBALS['user']['id'] ?? null;
-
-            if (!$userId) {
-                Response::json(null, 401, 'Unauthorized', false);
-            }
-
+            // Public detail: readable without a token (OptionalAuth).
             $collabId = $params['id'] ?? '';
             if ($collabId === '') {
                 Response::json(null, 404, 'Collaboration not found', false);
@@ -192,6 +290,31 @@ class CollabController
             $collab = CollabModel::findDetailById($collabId);
             if (!$collab) {
                 Response::json(null, 404, 'Collaboration not found', false);
+            }
+
+            // my_application: status aplikasi user login di collab ini
+            // (null kalau tidak login / belum pernah apply). Status DB
+            // 'rejected' sudah dipetakan ke 'declined' oleh model.
+            $myUserId = $GLOBALS['user']['id'] ?? null;
+            $collab['my_application'] = null;
+            if ($myUserId !== null) {
+                $myApp = CollabModel::findApplication($collabId, (string) $myUserId);
+                if ($myApp !== null) {
+                    $collab['my_application'] = ['status' => $myApp['status']];
+                }
+            }
+
+            // Link grup eksternal hanya boleh dilihat owner dan
+            // anggota yang sudah diterima. Pengunjung publik tidak
+            // menerima link-nya sama sekali (null), supaya grup
+            // tidak bisa dimasuki orang di luar tim.
+            $viewerId = $myUserId !== null ? (string) $myUserId : null;
+            $canSeeGroupLink = $viewerId !== null && (
+                ($collab['owner']['id'] ?? null) === $viewerId ||
+                CollabModel::isMember($collabId, $viewerId)
+            );
+            if (!$canSeeGroupLink) {
+                $collab['communication_url'] = null;
             }
 
             Response::json($collab, 200, 'Detail collaboration', true);
@@ -218,18 +341,15 @@ class CollabController
             }
 
             $targetUserId = $params['userId'] ?? '';
-            if($userId !== $targetUserId) {
-                Response::json(null, 404, 'Bukan Punya elu', false);
-            }
-
-
             if ($targetUserId === '') {
                 Response::json(null, 404, 'Collaboration Post not found!', false);
             }
 
+            // Daftar kolaborasi user mana pun boleh dilihat (bukan hanya milik sendiri);
+            // user tanpa kolaborasi mendapat list kosong, bukan 404.
             $collabs = CollabModel::getByUserId($targetUserId);
             if (empty($collabs)) {
-                Response::json(null, 404, 'Collaboration Post not found!', false);
+                Response::json([], 200, 'No Collaboration Post found', true);
             }
 
             $username = $collabs[0]['userId']['username'] ?? '';
@@ -237,6 +357,57 @@ class CollabController
         } catch (Throwable $e) {
             error_log('[COLLAB ERROR] ' . $e->getMessage());
             Response::json(null, 500, 'Terjadi kesalahan pada server saat mengambil kolaborasi pengguna', false);
+        }
+    }
+
+    /**
+     * Handler untuk GET /api/my-collaborations
+     * Mengambil collaboration yang dimiliki user, yang user ikuti sebagai
+     * anggota, atau yang user ajukan (pending) — beserta myStatus.
+     *
+     * @param  array<string, string> $params Path parameters dari Router
+     * @return void
+     */
+    public static function getMyCollaborations(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $collabs = CollabModel::getByMemberId($userId);
+            Response::json($collabs, 200, 'Your Collaborations!', true);
+        } catch (Throwable $e) {
+            error_log('[COLLAB ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat mengambil kolaborasi saya', false);
+        }
+    }
+
+    /**
+     * Handler untuk GET /api/my-collaborations/:id (audit P1 #15)
+     * Satu proyek dari sudut pandang member yang login — bentuk
+     * baris sama persis dengan versi daftarnya. 404 bila user
+     * tidak terlibat di proyek itu.
+     */
+    public static function getMyCollaborationById(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $collab = CollabModel::getOneByMemberId($userId, (string) ($params['id'] ?? ''));
+            if ($collab === null) {
+                Response::json(null, 404, 'Collaboration not found', false);
+            }
+            Response::json($collab, 200, 'Your Collaboration!', true);
+        } catch (Throwable $e) {
+            error_log('[COLLAB ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat mengambil kolaborasi saya', false);
         }
     }
 
@@ -288,18 +459,23 @@ class CollabController
             $mediaUrls      = $body['media_urls'] ?? $body['mediaUrls'] ?? null;
             $mediaPublicIds = $body['media_public_ids'] ?? $body['mediaPublicIds'] ?? null;
             $skillsNeeded   = $body['skills_needed'] ?? $body['skillsNeeded'] ?? null;
+            $dueDate        = $body['due_date'] ?? $body['dueDate'] ?? null;
 
             // Validasi field media (jika ada) mengikuti Express baseline
             // Jika disediakan, mediaUrls dan mediaPublicIds harus konsisten dan tidak kosong
             if (is_array($mediaPublicIds) && count($mediaPublicIds) > 0) {
-                if (count($mediaUrls) !== count($mediaPublicIds) || count($mediaUrls) === 0) {
+                if (!is_array($mediaUrls) || count($mediaUrls) !== count($mediaPublicIds) || count($mediaUrls) === 0) {
                     Response::json(null, 400, 'Jika mediaPublicIds disediakan, mediaUrls dan mediaPublicIds harus sama dan tidak kosong', false);
                 }
+            }
+            // Media harus berasal dari Cloudinary sendiri (folder underflow)
+            if (is_array($mediaUrls) && count($mediaUrls) > 0) {
+                UploadController::assertValidMedia(array_values($mediaUrls), is_array($mediaPublicIds) ? array_values($mediaPublicIds) : []);
             }
 
             // CEK OWNERSHIP SEBELUM UPDATE (mirip Express: findById lalu compare user_id)
             $pdo = getDB();
-            $checkStmt = $pdo->prepare("SELECT user_id, title FROM collaborations WHERE id = :id LIMIT 1");
+            $checkStmt = $pdo->prepare("SELECT user_id, title FROM collaborations WHERE id = :id AND deleted_at IS NULL LIMIT 1");
             $checkStmt->execute([':id' => $collabId]);
             $existing = $checkStmt->fetch();
 
@@ -320,51 +496,42 @@ class CollabController
             if ($description !== '' && $description !== null) {
                 $updateData['description'] = $description;
             }
+            // Validasi status: hanya nilai ENUM collaborations.status yang diterima
+            // (open / in-progress / completed — migration 20261110). Nilai lain
+            // ditolak 400 SEBELUM ada tulisan apa pun, supaya tidak ada partial update.
             if ($status !== '' && $status !== null) {
+                if (!in_array($status, ['open', 'in-progress', 'completed'], true)) {
+                    Response::json(null, 400, 'Status tidak valid. Status harus open, in-progress, atau completed', false);
+                }
                 $updateData['status'] = $status;
             }
             if ($requiredMember !== null && $requiredMember !== '') {
-                if (!is_numeric($requiredMember) || intval($requiredMember) < 1) {
-                    Response::json(null, 400, 'requiredMember harus angka minimal 1', false);
+                if (!is_numeric($requiredMember) || intval($requiredMember) < 1 || intval($requiredMember) > 10) {
+                    Response::json(null, 400, 'requiredMember harus angka 1-10', false);
                 }
                 $updateData['required_member'] = (int)$requiredMember;
             }
-
-            // Update media jika disediakan (mediaUrls + mediaPublicIds)
-            // Jika mediaUrls dan mediaPublicIds dikirim, jalankan update dengan logika SAME COUNT
-            if (is_array($mediaUrls) && is_array($mediaPublicIds) && count($mediaPublicIds) === count($mediaUrls) && count($mediaUrls) > 0) {
-                // Hapus media lama dan insert media yang baru
-                // UPDATE: DELETE + INSERT (SETAVIS)
-                $pdo->beginTransaction();
-                try {
-                    // Hapus media lama
-                    $delStmt = $pdo->prepare("DELETE FROM collab_media WHERE collab_id = :collab_id");
-                    $delStmt->execute([':collab_id' => $collabId]);
-
-                    // Insert media baru
-                    if (count($mediaUrls) > 0) {
-                        $insStmt = $pdo->prepare("INSERT INTO collab_media (id, collab_id, media_url, media_public_id) VALUES (:id, :collab_id, :media_url, :media_public_id)");
-                        foreach ($mediaUrls as $index => $mediaUrl) {
-                            $mediaId = CollabModel::generateUuid();
-                            $mediaPublicId = $mediaPublicIds[$index] ?? null;
-                            $insStmt->execute([
-                                ':id'              => $mediaId,
-                                ':collab_id'       => $collabId,
-                                ':media_url'       => $mediaUrl,
-                                ':media_public_id' => $mediaPublicId,
-                            ]);
-                        }
+            // due_date: kunci DIKIRIM dengan nilai kosong/null berarti
+            // "hapus tanggal" (form edit bisa mengosongkannya); kunci
+            // yang tidak dikirim sama sekali berarti "jangan diubah".
+            $clearDueDate = false;
+            if (array_key_exists('due_date', $body) || array_key_exists('dueDate', $body)) {
+                if ($dueDate === null || trim((string)$dueDate) === '') {
+                    $clearDueDate = true;
+                } else {
+                    $dueTimestamp = strtotime((string)$dueDate);
+                    if ($dueTimestamp === false) {
+                        Response::json(null, 400, 'Format due_date tidak valid', false);
                     }
-                    $pdo->commit();
-                } catch (Throwable $e) {
-                    if ($pdo->inTransaction()) {
-                        $pdo->rollBack();
+                    if (date('Y-m-d', $dueTimestamp) < date('Y-m-d')) {
+                        Response::json(null, 400, 'due_date tidak boleh di masa lalu', false);
                     }
-                    Response::json(null, 500, 'Gagal memperbarui media: ' . $e->getMessage(), false);
+                    $updateData['due_date'] = date('Y-m-d', $dueTimestamp);
                 }
             }
 
-            // Update skills jika disediakan
+            // Validasi skills jika disediakan — tanpa menulis apa pun dulu.
+            $normalizedSkillIds = null;
             if (is_array($skillsNeeded) && count($skillsNeeded) > 0) {
                 $normalizedSkillIds = [];
                 foreach ($skillsNeeded as $skill) {
@@ -398,14 +565,46 @@ class CollabController
                 if ($skillValidationError !== null) {
                     Response::json(null, 400, $skillValidationError, false);
                 }
+            }
 
-                $pdo->beginTransaction();
-                try {
-                    // Hapus skills lama
+            // Media hanya diupdate kalau mediaUrls + mediaPublicIds dikirim
+            // berpasangan (jumlah sama). Pasangan kosong = hapus semua foto
+            // (form edit menghapus foto terakhir).
+            $hasMediaUpdate = is_array($mediaUrls)
+                && is_array($mediaPublicIds)
+                && count($mediaPublicIds) === count($mediaUrls);
+
+            if (empty($updateData) && !$clearDueDate && $normalizedSkillIds === null && !$hasMediaUpdate) {
+                Response::json(null, 400, 'Tidak ada data yang diperbarui', false);
+            }
+
+            // SATU transaksi untuk seluruh update (media + skills + circle + collaborations):
+            // gagal di satu bagian = rollback semuanya, tidak ada partial update.
+            $pdo->beginTransaction();
+            try {
+                // Update media (DELETE + INSERT)
+                if ($hasMediaUpdate) {
+                    $delStmt = $pdo->prepare("DELETE FROM collab_media WHERE collab_id = :collab_id");
+                    $delStmt->execute([':collab_id' => $collabId]);
+
+                    $insStmt = $pdo->prepare("INSERT INTO collab_media (id, collab_id, media_url, media_public_id) VALUES (:id, :collab_id, :media_url, :media_public_id)");
+                    foreach ($mediaUrls as $index => $mediaUrl) {
+                        $mediaId = CollabModel::generateUuid();
+                        $mediaPublicId = $mediaPublicIds[$index] ?? null;
+                        $insStmt->execute([
+                            ':id'              => $mediaId,
+                            ':collab_id'       => $collabId,
+                            ':media_url'       => $mediaUrl,
+                            ':media_public_id' => $mediaPublicId,
+                        ]);
+                    }
+                }
+
+                // Update skills (DELETE + INSERT)
+                if ($normalizedSkillIds !== null) {
                     $delSkillStmt = $pdo->prepare("DELETE FROM collab_skills WHERE collab_id = :collab_id");
                     $delSkillStmt->execute([':collab_id' => $collabId]);
 
-                    // Insert skills baru
                     $insSkillStmt = $pdo->prepare("INSERT INTO collab_skills (id, collab_id, skill_id) VALUES (:id, :collab_id, :skill_id)");
                     foreach ($normalizedSkillIds as $skillId) {
                         $ssId = CollabModel::generateUuid();
@@ -415,60 +614,52 @@ class CollabController
                             ':skill_id'  => $skillId,
                         ]);
                     }
-                    $pdo->commit();
-                } catch (Throwable $e) {
-                    if ($pdo->inTransaction()) {
-                        $pdo->rollBack();
+                }
+
+                // UPDATE utama tabel collaborations — title ditulis SEKALI di sini.
+                if (!empty($updateData)) {
+                    $setClause = [];
+                    foreach (array_keys($updateData) as $key) {
+                        $setClause[] = "$key = :$key";
                     }
-                    Response::json(null, 500, 'Gagal memperbarui skills: ' . $e->getMessage(), false);
-                }
-            }
+                    $setClauseStr = implode(', ', $setClause);
+                    $updateStmt = $pdo->prepare("UPDATE collaborations SET $setClauseStr WHERE id = :id");
+                    $updateStmt->execute(array_merge($updateData, [':id' => $collabId]));
 
-            // Update title di tabel collaborations jika title diberikan
-            // Jika title diupdate, update juga circle.title agar konsisten
-            if (isset($updateData['title']) && $updateData['title'] !== $existing['title']) {
-                $pdo->beginTransaction();
-                try {
-                    $collabStmt = $pdo->prepare("UPDATE collaborations SET title = :title WHERE id = :id");
-                    $collabStmt->execute([':title' => $updateData['title'], ':id' => $collabId]);
-
-                    // Otomatis update title circle
-                    $circleStmt = $pdo->prepare("UPDATE circle SET title = :title WHERE collaboration_id = :collab_id");
-                    $circleStmt->execute([':title' => $updateData['title'], ':collab_id' => $collabId]);
-
-                    $pdo->commit();
-                } catch (Throwable $e) {
-                    if ($pdo->inTransaction()) {
-                        $pdo->rollBack();
+                    // Title circle ikut diupdate agar konsisten dengan title collab.
+                    if (isset($updateData['title'])) {
+                        $circleStmt = $pdo->prepare("UPDATE circle SET title = :title WHERE collaboration_id = :collab_id");
+                        $circleStmt->execute([':title' => $updateData['title'], ':collab_id' => $collabId]);
                     }
-                    Response::json(null, 500, 'Gagal memperbarui collaborations atau circle: ' . $e->getMessage(), false);
                 }
-            }
 
-            // Jalankan UPDATE utama
-            error_log('UPDATE DATA: ' . json_encode($updateData));
-            
-            if (!empty($updateData)) {
-                $setClause = [];
-                foreach (array_keys($updateData) as $key) {
-                    $setClause[] = "$key = :$key";
+                if ($clearDueDate) {
+                    $clearDueStmt = $pdo->prepare("UPDATE collaborations SET due_date = NULL WHERE id = :id");
+                    $clearDueStmt->execute([':id' => $collabId]);
                 }
-                $setClauseStr = implode(', ', $setClause);
-                $updateStmt = $pdo->prepare("UPDATE collaborations SET $setClauseStr WHERE id = :id");
-                $updateStmt->execute(array_merge($updateData, [':id' => $collabId]));
-            } else {
-                Response::json(null, 400, 'Tidak ada data yang diperbarui', false);
+
+                $pdo->commit();
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                error_log('[COLLAB UPDATE ERROR] ' . $e->getMessage());
+                Response::json(null, 500, 'Gagal memperbarui kolaborasi', false);
             }
 
             // Ambil data terbaru
             $updated = CollabModel::findById($collabId);
             if ($updated) {
+                // AI Moderator: konten berubah, antrekan penilaian ulang.
+                AiModerationService::enqueue('collab', (string) $collabId, 'edit');
+
                 Response::json($updated, 200, 'Postingan kolaborasi berhasil diperbarui!', true);
             } else {
                 Response::json(null, 404, 'Postingan kolaborasi tidak ditemukan!', false);
             }
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[COLLAB ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat memperbarui kolaborasi', false);
         }
     }
     
@@ -487,6 +678,535 @@ class CollabController
      * @param  array<string, string> $params Path parameters dari Router (memuat 'id')
      * @return void
      */
+    /**
+     * Handler untuk POST /api/collab/:id/apply
+     * Mengajukan lamaran bergabung ke kolaborasi (status pending).
+     *
+     * - 401 jika tidak login, 404 jika collab tidak ada / soft-deleted
+     * - 403 jika pelamar adalah owner
+     * - 409 'Already applied' jika sudah ada aplikasi pending/accepted,
+     *   atau user sudah menjadi anggota
+     * - 409 'Collaboration is full' jika accepted == required_member
+     * - 201 {application} jika berhasil; apply ulang setelah ditolak
+     *   membuka lagi aplikasi lama (UNIQUE user_id+collab_id).
+     * Row collab dikunci di dalam transaksi supaya pengecekan kursi
+     * antar request yang bersamaan tidak bisa overbooked.
+     *
+     * @param  array<string, string> $params Path parameters dari Router (memuat 'id')
+     * @return void
+     */
+    public static function applyToCollab(array $params = []): void
+    {
+        $pdo = getDB();
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $collabId = $params['id'] ?? '';
+            if ($collabId === '') {
+                Response::json(null, 404, 'Collaboration not found', false);
+            }
+
+            // Ambil request body (pesan lamaran opsional)
+            $body = $GLOBALS['body'] ?? [];
+            if (empty($body)) {
+                $raw = file_get_contents('php://input');
+                if (!empty($raw)) {
+                    $decoded = json_decode($raw, true);
+                    if (is_array($decoded)) {
+                        $body = $decoded;
+                    }
+                }
+            }
+            $message = trim((string)($body['message'] ?? ''));
+            $message = $message === '' ? null : $message;
+
+            $pdo->beginTransaction();
+            try {
+                $locked = CollabModel::lockCollabForMembership($pdo, $collabId);
+                if (!$locked) {
+                    $pdo->rollBack();
+                    Response::json(null, 404, 'Collaboration not found', false);
+                }
+
+                if ((string)$locked['user_id'] === (string)$userId) {
+                    $pdo->rollBack();
+                    Response::json(null, 403, 'You cannot apply to your own project', false);
+                }
+
+                $existing = CollabModel::findApplication($collabId, (string)$userId);
+                if ($existing !== null && in_array($existing['status'], ['pending', 'accepted'], true)) {
+                    $pdo->rollBack();
+                    Response::json(null, 409, 'Already applied', false);
+                }
+
+                if (CollabModel::isMember($collabId, (string)$userId)) {
+                    $pdo->rollBack();
+                    Response::json(null, 409, 'Already a member', false);
+                }
+
+                $acceptedCount = CollabModel::countAcceptedMembers($collabId, $pdo);
+                if ($acceptedCount >= (int)$locked['required_member']) {
+                    $pdo->rollBack();
+                    Response::json(null, 409, 'Collaboration is full', false);
+                }
+
+                $application = $existing !== null
+                    ? CollabModel::reopenApplication($collabId, (string)$userId, $message)
+                    : CollabModel::createApplication($collabId, (string)$userId, $message);
+
+                $pdo->commit();
+
+                // Inbox: pastikan percakapan aplikasi ada (dibuat
+                // sekali per aplikasi) dan pesan lamaran menjadi
+                // pesan di thread-nya. Best-effort — apply tidak
+                // boleh gagal gara-gara inbox.
+                try {
+                    InboxModel::ensureForApplication($application, (string)$locked['user_id'], (string)$userId, $message);
+                } catch (Throwable $inboxError) {
+                    error_log('[INBOX APPLY HOOK] ' . $inboxError->getMessage());
+                }
+
+                // Notifikasi lonceng untuk pemilik project — pola yang
+                // sama seperti notifikasi like: best-effort, kegagalan
+                // di sini tidak boleh menggagalkan apply-nya sendiri.
+                try {
+                    $notifRow = NotificationModel::createApplicationNotification(
+                        (string)$locked['id'],
+                        (string)$locked['user_id'],
+                        (string)$userId
+                    );
+                    if ($notifRow) {
+                        $apiRow = NotificationModel::findApiRow($notifRow['id']);
+                        if ($apiRow) {
+                            Realtime::publishNotification((string)$locked['user_id'], $apiRow);
+                        }
+                    }
+                } catch (Throwable $notifError) {
+                    error_log('[APPLY NOTIFICATION] ' . $notifError->getMessage());
+                }
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                throw $e;
+            }
+
+            Response::json(['application' => $application], 201, 'Application submitted', true);
+        } catch (PDOException $e) {
+            // Balapan dua apply bersamaan: UNIQUE user_id+collab_id.
+            if ((string)$e->getCode() === '23000') {
+                Response::json(null, 409, 'Already applied', false);
+            }
+            error_log('[COLLAB APPLY ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat mengajukan lamaran', false);
+        } catch (Throwable $e) {
+            error_log('[COLLAB APPLY ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat mengajukan lamaran', false);
+        }
+    }
+
+    /**
+     * Handler untuk GET /api/collab/:id/applications
+     * Daftar aplikasi satu collab, hanya untuk owner (403 jika bukan).
+     * Urutan: pending dulu, lalu yang sudah diputuskan.
+     *
+     * @param  array<string, string> $params Path parameters dari Router (memuat 'id')
+     * @return void
+     */
+    public static function listApplications(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $collabId = $params['id'] ?? '';
+            if ($collabId === '') {
+                Response::json(null, 404, 'Collaboration not found', false);
+            }
+
+            $collab = CollabModel::findDetailById($collabId);
+            if (!$collab) {
+                Response::json(null, 404, 'Collaboration not found', false);
+            }
+
+            $ownerId = $collab['owner']['id'] ?? null;
+            if ((string)$ownerId !== (string)$userId) {
+                Response::json(null, 403, 'Only the owner can view applications', false);
+            }
+
+            $applications = CollabModel::listApplications($collabId);
+            Response::json($applications, 200, 'Applications', true);
+        } catch (Throwable $e) {
+            error_log('[COLLAB ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat mengambil daftar lamaran', false);
+        }
+    }
+
+    /**
+     * Handler untuk PUT /api/collab/:id/applications/:applicationId/accept
+     * Owner menerima lamaran: aplikasi -> accepted DAN pelamar masuk
+     * user_collaboration (anggota diterima) dalam satu transaksi.
+     *
+     * - 404 jika collab / aplikasi tidak ada
+     * - 403 jika bukan owner
+     * - 409 jika aplikasi sudah diputuskan, atau collab sudah penuh
+     *
+     * @param  array<string, string> $params Path parameters dari Router (memuat 'id', 'applicationId')
+     * @return void
+     */
+    public static function acceptApplication(array $params = []): void
+    {
+        $pdo = getDB();
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $collabId = $params['id'] ?? '';
+            $applicationId = $params['applicationId'] ?? '';
+            if ($collabId === '' || $applicationId === '') {
+                Response::json(null, 404, 'Application not found', false);
+            }
+
+            $pdo->beginTransaction();
+            try {
+                $locked = CollabModel::lockCollabForMembership($pdo, $collabId);
+                if (!$locked) {
+                    $pdo->rollBack();
+                    Response::json(null, 404, 'Collaboration not found', false);
+                }
+
+                if ((string)$locked['user_id'] !== (string)$userId) {
+                    $pdo->rollBack();
+                    Response::json(null, 403, 'Only the owner can review applications', false);
+                }
+
+                $application = CollabModel::findApplicationById($collabId, $applicationId);
+                if (!$application) {
+                    $pdo->rollBack();
+                    Response::json(null, 404, 'Application not found', false);
+                }
+
+                if ($application['status'] !== 'pending') {
+                    $pdo->rollBack();
+                    Response::json(null, 409, 'Application already decided', false);
+                }
+
+                $acceptedCount = CollabModel::countAcceptedMembers($collabId, $pdo);
+                if ($acceptedCount >= (int)$locked['required_member']) {
+                    $pdo->rollBack();
+                    Response::json(null, 409, 'Collaboration is full', false);
+                }
+
+                if (!CollabModel::acceptApplicationRow($pdo, $collabId, $applicationId)) {
+                    $pdo->rollBack();
+                    Response::json(null, 409, 'Application already decided', false);
+                }
+
+                CollabModel::insertMember($pdo, $collabId, (string)$application['user_id']);
+                $pdo->commit();
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                throw $e;
+            }
+
+            $fresh = CollabModel::findApplicationById($collabId, $applicationId);
+            $acceptedCount = CollabModel::countAcceptedMembers($collabId);
+            $availableSlots = max(0, (int)$locked['required_member'] - $acceptedCount);
+            self::publishApplicationDecisionTo($applicationId, isset($application['user_id']) ? (string)$application['user_id'] : null);
+            Response::json([
+                'application' => $fresh,
+                'accepted_member_count' => $acceptedCount,
+                'available_slots' => $availableSlots,
+            ], 200, 'Application accepted', true);
+        } catch (PDOException $e) {
+            if ((string)$e->getCode() === '23000') {
+                Response::json(null, 409, 'Already a member', false);
+            }
+            error_log('[COLLAB ACCEPT ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat menerima lamaran', false);
+        } catch (Throwable $e) {
+            error_log('[COLLAB ACCEPT ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat menerima lamaran', false);
+        }
+    }
+
+    /**
+     * Handler untuk POST /api/collab/:id/complete
+     * Owner menandai proyek selesai (lihat CollabModel::completeProject).
+     */
+    public static function completeProject(array $params = []): void
+    {
+        self::changeProjectProgress($params, true);
+    }
+
+    /**
+     * Handler untuk POST /api/collab/:id/reopen
+     * Owner membuka lagi proyek yang sudah complete.
+     */
+    public static function reopenProject(array $params = []): void
+    {
+        self::changeProjectProgress($params, false);
+    }
+
+    /**
+     * Notifikasi status proyek (audit P1 #10) untuk semua member
+     * selain owner, lengkap dengan push realtime. Kegagalan di
+     * sini tidak boleh menggagalkan perubahan statusnya sendiri.
+     */
+    private static function notifyMembersOfStatusChange(string $collabId, string $ownerId, string $type, string $title): void
+    {
+        try {
+            $pdo = getDB();
+            $stmt = $pdo->prepare("SELECT user_id FROM user_collaboration WHERE collaboration_id = ?");
+            $stmt->execute([$collabId]);
+            foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $memberId) {
+                $notifRow = NotificationModel::createCollabStatusNotification((string) $memberId, $ownerId, $type, $title, $collabId);
+                if ($notifRow) {
+                    $apiRow = NotificationModel::findApiRow($notifRow['id']);
+                    if ($apiRow) {
+                        Realtime::publishNotification((string) $memberId, $apiRow);
+                    }
+                }
+            }
+        } catch (Throwable $e) {
+            error_log('[COLLAB STATUS NOTIF] ' . $e->getMessage());
+        }
+    }
+
+    private static function changeProjectProgress(array $params, bool $complete): void
+    {
+        $pdo = getDB();
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $collabId = $params['id'] ?? '';
+            if ($collabId === '') {
+                Response::json(null, 404, 'Collaboration not found', false);
+            }
+
+            $pdo->beginTransaction();
+            try {
+                $locked = CollabModel::lockCollabForMembership($pdo, $collabId);
+                if (!$locked) {
+                    $pdo->rollBack();
+                    Response::json(null, 404, 'Collaboration not found', false);
+                }
+
+                if ((string)$locked['user_id'] !== (string)$userId) {
+                    $pdo->rollBack();
+                    Response::json(null, 403, 'Only the owner can change project progress', false);
+                }
+
+                if ($complete) {
+                    CollabModel::completeProject($pdo, $collabId);
+                } else {
+                    CollabModel::reopenProject($pdo, $collabId);
+                }
+                $pdo->commit();
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                throw $e;
+            }
+
+            try {
+                $metaStmt = getDB()->prepare("SELECT title FROM collaborations WHERE id = ?");
+                $metaStmt->execute([$collabId]);
+                $projectTitle = (string) ($metaStmt->fetchColumn() ?: 'Your project');
+                self::notifyMembersOfStatusChange(
+                    $collabId,
+                    (string) $userId,
+                    $complete ? 'collab_completed' : 'collab_reopened',
+                    $complete
+                        ? 'Marked "' . $projectTitle . '" complete'
+                        : 'Reopened "' . $projectTitle . '"'
+                );
+            } catch (Throwable $e) {
+                error_log('[COLLAB STATUS NOTIF] ' . $e->getMessage());
+            }
+
+            Response::json(
+                ['id' => $collabId, 'status' => $complete ? 'completed' : 'in-progress'],
+                200,
+                $complete ? 'Project marked complete' : 'Project reopened'
+            );
+        } catch (Throwable $e) {
+            error_log('[COLLAB PROGRESS ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server', false);
+        }
+    }
+
+    /**
+     * Handler untuk PUT /api/collab/:id/members/:userId/status
+     * Owner mengatur status kerja satu member:
+     * {status: 'not-started' | 'complete' | 'revise'}.
+     *
+     * - 401 belum login, 404 collab/member tidak ada
+     * - 403 bukan owner, 400 status di luar enum
+     */
+    public static function setMemberWorkStatus(array $params = []): void
+    {
+        $pdo = getDB();
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $collabId = $params['id'] ?? '';
+            $memberId = $params['userId'] ?? '';
+            if ($collabId === '' || $memberId === '') {
+                Response::json(null, 404, 'Member not found', false);
+            }
+
+            $body = $GLOBALS['body'] ?? [];
+            if (empty($body)) {
+                $raw = file_get_contents('php://input');
+                if ($raw) {
+                    $decoded = json_decode($raw, true);
+                    if (is_array($decoded)) {
+                        $body = $decoded;
+                    }
+                }
+            }
+            $status = trim((string)($body['status'] ?? ''));
+            if (!in_array($status, ['not-started', 'complete', 'revise'], true)) {
+                Response::json(null, 400, 'Status tidak valid. Status harus not-started, complete, atau revise', false);
+            }
+
+            $pdo->beginTransaction();
+            try {
+                $locked = CollabModel::lockCollabForMembership($pdo, $collabId);
+                if (!$locked) {
+                    $pdo->rollBack();
+                    Response::json(null, 404, 'Collaboration not found', false);
+                }
+
+                if ((string)$locked['user_id'] !== (string)$userId) {
+                    $pdo->rollBack();
+                    Response::json(null, 403, 'Only the owner can set member status', false);
+                }
+
+                $ok = CollabModel::setMemberWorkStatus($pdo, $collabId, $memberId, $status);
+                if (!$ok) {
+                    $pdo->rollBack();
+                    Response::json(null, 404, 'Member not found', false);
+                }
+                $pdo->commit();
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                throw $e;
+            }
+
+            try {
+                $metaStmt = getDB()->prepare("SELECT title FROM collaborations WHERE id = ?");
+                $metaStmt->execute([$collabId]);
+                $projectTitle = (string) ($metaStmt->fetchColumn() ?: 'Your project');
+                $statusLabel = ['complete' => 'Complete', 'revise' => 'Revision needed', 'not-started' => 'Not started'][$status] ?? $status;
+                $notifRow = NotificationModel::createCollabStatusNotification(
+                    $memberId,
+                    (string) $userId,
+                    'member_status',
+                    'Set your status in "' . $projectTitle . '" to ' . $statusLabel,
+                    $collabId
+                );
+                if ($notifRow) {
+                    $apiRow = NotificationModel::findApiRow($notifRow['id']);
+                    if ($apiRow) {
+                        Realtime::publishNotification($memberId, $apiRow);
+                    }
+                }
+            } catch (Throwable $e) {
+                error_log('[COLLAB STATUS NOTIF] ' . $e->getMessage());
+            }
+
+            Response::json(['user_id' => $memberId, 'status' => $status], 200, 'Member status updated');
+        } catch (Throwable $e) {
+            error_log('[COLLAB PROGRESS ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server', false);
+        }
+    }
+
+    /**
+     * Handler untuk PUT /api/collab/:id/applications/:applicationId/decline
+     * Owner menolak lamaran: aplikasi -> rejected (diekspos 'declined').
+     * Pelamar boleh apply ulang sesudahnya (apply membuka lagi barisnya).
+     *
+     * - 404 jika collab / aplikasi tidak ada
+     * - 403 jika bukan owner
+     * - 409 jika aplikasi sudah diputuskan
+     *
+     * @param  array<string, string> $params Path parameters dari Router (memuat 'id', 'applicationId')
+     * @return void
+     */
+    public static function declineApplication(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $collabId = $params['id'] ?? '';
+            $applicationId = $params['applicationId'] ?? '';
+            if ($collabId === '' || $applicationId === '') {
+                Response::json(null, 404, 'Application not found', false);
+            }
+
+            $collab = CollabModel::findDetailById($collabId);
+            if (!$collab) {
+                Response::json(null, 404, 'Collaboration not found', false);
+            }
+
+            $ownerId = $collab['owner']['id'] ?? null;
+            if ((string)$ownerId !== (string)$userId) {
+                Response::json(null, 403, 'Only the owner can review applications', false);
+            }
+
+            $application = CollabModel::findApplicationById($collabId, $applicationId);
+            if (!$application) {
+                Response::json(null, 404, 'Application not found', false);
+            }
+
+            if ($application['status'] !== 'pending') {
+                Response::json(null, 409, 'Application already decided', false);
+            }
+
+            if (!CollabModel::declineApplicationRow($collabId, $applicationId)) {
+                Response::json(null, 409, 'Application already decided', false);
+            }
+
+            $fresh = CollabModel::findApplicationById($collabId, $applicationId);
+            self::publishApplicationDecisionTo($applicationId, isset($application['user_id']) ? (string)$application['user_id'] : null);
+            Response::json(['application' => $fresh], 200, 'Application declined', true);
+        } catch (Throwable $e) {
+            error_log('[COLLAB DECLINE ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server saat menolak lamaran', false);
+        }
+    }
+
+
     public static function deleteCollab(array $params = []): void
     {
         try {
@@ -515,13 +1235,110 @@ class CollabController
                 Response::json(null, 403, 'Bukan hak lu buat hapus collab ini!', false);
             }
 
-            // Hapus kolaborasi dari database (CASCADE akan membersihkan child tables secara atomik)
+            // Hapus hanya boleh selama belum ada yang gabung: baris
+            // user_collaboration isinya owner saja (count <= 1). Kalau
+            // sudah ada anggota lain yang diterima, tolak.
+            $memberStmt = getDB()->prepare("SELECT COUNT(*) FROM user_collaboration WHERE collaboration_id = :id");
+            $memberStmt->execute([':id' => $collabId]);
+            if ((int)$memberStmt->fetchColumn() > 1) {
+                Response::json(null, 409, 'Kolaborasi sudah memiliki anggota, tidak dapat dihapus!', false);
+            }
+
+            // Soft delete kolaborasi (deleted_at = NOW()). Child tables
+            // (collab_media, collab_skills, circle, applications, user_collaboration)
+            // TIDAK dihapus — tidak ada CASCADE di sini.
             CollabModel::delete($collabId);
 
             Response::json($collab, 200, 'Postingan kolaborasi berhasil dihapus!', true);
         } catch (Throwable $e) {
             error_log('[COLLAB DELETE ERROR] ' . $e->getMessage());
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
+        }
+    }
+
+    /**
+     * Beritahu satu user lewat realtime bahwa status sebuah aplikasi
+     * berubah (kartu aplikasi di inbox-nya ikut berubah). Best-effort:
+     * kegagalan publish tidak pernah menggagalkan aksi utamanya.
+     */
+    private static function publishApplicationDecisionTo(string $applicationId, ?string $recipientId): void
+    {
+        try {
+            if ($recipientId === null || $recipientId === '') {
+                return;
+            }
+            $conversationId = InboxModel::findByApplication(getDB(), $applicationId);
+            if ($conversationId !== null) {
+                Realtime::publishInboxUpdate($recipientId, $conversationId);
+            }
+        } catch (Throwable $e) {
+            error_log('[INBOX DECISION PUBLISH] ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Handler untuk DELETE /api/collab/:id/apply
+     * Pelamar menarik lamarannya sendiri (hanya saat masih pending):
+     * status menjadi 'withdrawn' dan pemilik project menerima event
+     * realtime supaya kartu aplikasi di inbox-nya ikut berubah.
+     */
+    public static function withdrawApplication(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $collabId = $params['id'] ?? '';
+            if ($collabId === '') {
+                Response::json(null, 404, 'Collaboration not found', false);
+            }
+
+            $application = CollabModel::findApplication($collabId, (string)$userId);
+            if ($application === null) {
+                Response::json(null, 404, 'Application not found', false);
+            }
+            if (($application['status'] ?? '') !== 'pending') {
+                Response::json(null, 409, 'Application already decided', false);
+            }
+
+            CollabModel::withdrawApplicationRow($collabId, (string)$userId);
+
+            // Beritahu pemilik project: kartu aplikasi berubah status.
+            if (isset($application['id'])) {
+                $ownerStmt = getDB()->prepare("SELECT user_id FROM collaborations WHERE id = :id LIMIT 1");
+                $ownerStmt->execute([':id' => $collabId]);
+                $ownerId = $ownerStmt->fetchColumn();
+                if ($ownerId !== false) {
+                    self::publishApplicationDecisionTo((string)$application['id'], (string)$ownerId);
+
+                    // Lamaran ditarik -> notifikasi aplikasinya ikut
+                    // hilang dari lonceng pemilik (pola unlike).
+                    try {
+                        $notifRow = NotificationModel::findApplicationNotification($collabId, (string)$userId);
+                        NotificationModel::deleteApplicationNotification($collabId, (string)$userId);
+                        if ($notifRow) {
+                            Realtime::publishNotificationRemoved((string)$ownerId, $notifRow['id']);
+                        }
+                    } catch (Throwable $notifError) {
+                        error_log('[WITHDRAW NOTIFICATION] ' . $notifError->getMessage());
+                    }
+                }
+            }
+
+            Response::json(
+                ['application' => CollabModel::findApplication($collabId, (string)$userId)],
+                200,
+                'Application withdrawn',
+                true
+            );
+        } catch (Throwable $e) {
+            error_log('[COLLAB WITHDRAW ERROR] ' . $e->getMessage());
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 }

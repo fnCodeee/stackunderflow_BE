@@ -13,6 +13,7 @@
 declare(strict_types=1);
 
 require_once BASE_PATH . '/config/database.php';
+require_once BASE_PATH . '/models/CircleZoneModel.php';
 
 class CircleModel
 {
@@ -48,6 +49,10 @@ class CircleModel
             ':title'             => $title,
             ':photo_profile_url' => $photoProfileUrl,
         ]);
+
+        // Setiap circle lahir dengan dua zone bawaan (announcements
+        // dan general), di transaksi yang sama dengan circle-nya.
+        CircleZoneModel::createDefaults($db, $id);
 
         $created = self::findByCollaborationId($collabId, $db);
         if ($created !== null) {
@@ -160,6 +165,68 @@ class CircleModel
         $db = $pdo ?? getDB();
         $stmt = $db->prepare("DELETE FROM circle WHERE collaboration_id = :collaboration_id");
         return $stmt->execute([':collaboration_id' => $collabId]);
+    }
+
+    /**
+     * Memperbarui data circle secara fleksibel berdasarkan id circle
+     * (title / photo_profile_url). Dipakai endpoint settings circle.
+     *
+     * @param  array<string, mixed> $data
+     */
+    public static function updateById(string $id, array $data, ?PDO $pdo = null): bool
+    {
+        $db = $pdo ?? getDB();
+        $fields = [];
+        $params = [':id' => $id];
+
+        if (array_key_exists('title', $data)) {
+            $fields[] = "title = :title";
+            $params[':title'] = $data['title'];
+        }
+        if (array_key_exists('photo_profile_url', $data)) {
+            $fields[] = "photo_profile_url = :photo_profile_url";
+            $params[':photo_profile_url'] = $data['photo_profile_url'];
+        }
+        if (empty($fields)) {
+            return true;
+        }
+
+        $stmt = $db->prepare("UPDATE circle SET " . implode(', ', $fields) . " WHERE id = :id");
+        return $stmt->execute($params);
+    }
+
+    /** Menghapus circle berdasarkan id circle. */
+    public static function deleteById(string $id, ?PDO $pdo = null): bool
+    {
+        $db = $pdo ?? getDB();
+        $stmt = $db->prepare("DELETE FROM circle WHERE id = :id");
+        return $stmt->execute([':id' => $id]);
+    }
+
+    /**
+     * Daftar circle yang bisa diakses user: circle dari collaboration
+     * yang ia miliki atau yang ia ikuti sebagai accepted member
+     * (baris user_collaboration). Dipakai GET /api/circles.
+     *
+     * @param  string $userId
+     * @return array<int, array<string, mixed>>
+     */
+    public static function listForUser(string $userId): array
+    {
+        $db = getDB();
+        $stmt = $db->prepare(
+            "SELECT ci.id, ci.collaboration_id, ci.title, ci.photo_profile_url, ci.timestamp,
+                    c.status, c.user_id
+             FROM circle ci
+             JOIN collaborations c ON c.id = ci.collaboration_id
+             WHERE c.deleted_at IS NULL
+               AND (c.user_id = :owner_id
+                    OR EXISTS (SELECT 1 FROM user_collaboration uc
+                               WHERE uc.collaboration_id = c.id AND uc.user_id = :member_id))
+             ORDER BY ci.timestamp DESC"
+        );
+        $stmt->execute([':owner_id' => $userId, ':member_id' => $userId]);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     /**

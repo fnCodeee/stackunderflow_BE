@@ -15,6 +15,10 @@ declare(strict_types=1);
 require_once BASE_PATH . '/models/PostModel.php';
 require_once BASE_PATH . '/models/LikeModel.php';
 require_once BASE_PATH . '/models/CommentModel.php';
+require_once BASE_PATH . '/models/CommentLikeModel.php';
+require_once BASE_PATH . '/models/NotificationModel.php';
+require_once BASE_PATH . '/models/AiModerationService.php';
+require_once BASE_PATH . '/utils/Realtime.php';
 require_once BASE_PATH . '/utils/Response.php';
 
 class PostController
@@ -47,19 +51,18 @@ class PostController
                 }
             }
 
-            $title          = trim((string)($body['title'] ?? ''));
             $description    = trim((string)($body['description'] ?? ''));
             $portfolioType  = trim((string)($body['portfolio_type'] ?? $body['portfolioType'] ?? 'link'));
             $externalUrlRaw = $body['external_url'] ?? $body['externalUrl'] ?? null;
-            $mediaUrls      = $body['media_urls'] ?? $body['mediaUrls'] ?? null;
+            $mediaUrls      = $body['media_urls'] ?? $body['mediaUrls'] ?? [];
             $mediaPublicIds = $body['media_public_ids'] ?? $body['mediaPublicIds'] ?? [];
 
-            // 2. Validasi field wajib sesuai baseline Express
+            // 2. Validasi field wajib: description. media_urls
+            // opsional sejak 2026-11-10 — post teks saja boleh (array
+            // kosong); kalau dikirim harus berupa array.
             if (
-                $title === '' ||
                 $description === '' ||
-                !is_array($mediaUrls) ||
-                count($mediaUrls) === 0
+                !is_array($mediaUrls)
             ) {
                 Response::json(null, 400, 'Please fill all the required fields!', false);
             }
@@ -67,6 +70,10 @@ class PostController
             // 3. Validasi konsistensi jumlah mediaUrls dan mediaPublicIds jika mediaPublicIds dikirim
             if (is_array($mediaPublicIds) && count($mediaPublicIds) > 0 && count($mediaUrls) !== count($mediaPublicIds)) {
                 Response::json(null, 400, 'Count of mediaUrls and mediaPublicIds must be same!', false);
+            }
+            // Media harus berasal dari Cloudinary sendiri (folder underflow)
+            if (is_array($mediaUrls) && count($mediaUrls) > 0) {
+                UploadController::assertValidMedia(array_values($mediaUrls), is_array($mediaPublicIds) ? array_values($mediaPublicIds) : []);
             }
 
             $externalUrl = ($externalUrlRaw !== null && trim((string)$externalUrlRaw) !== '')
@@ -76,7 +83,6 @@ class PostController
             // 4. Simpan post ke database melalui PostModel
             $result = PostModel::create([
                 'user_id'          => $userId,
-                'title'            => $title,
                 'description'      => $description,
                 'portfolio_type'   => in_array($portfolioType, ['link', 'images'], true) ? $portfolioType : 'link',
                 'external_url'     => $externalUrl,
@@ -84,9 +90,15 @@ class PostController
                 'media_public_ids' => is_array($mediaPublicIds) ? array_values($mediaPublicIds) : [],
             ]);
 
+            // AI Moderator: antrekan post baru untuk diperiksa.
+            if (is_array($result) && !empty($result['id'])) {
+                AiModerationService::enqueue('post', (string) $result['id'], 'new_content');
+            }
+
             Response::json($result, 200, 'Postingan Berhasil dibuat', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -103,15 +115,40 @@ class PostController
         try {
             $userId = $GLOBALS['user']['id'] ?? null;
 
+            // Pagination opt-in (audit P0, 2026-11-14): tanpa parameter
+            // page/limit, respons tetap daftar penuh seperti kontrak
+            // lama (masih dipakai hydrator/poller); dengan parameter,
+            // server memotong per halaman + mengirim metadata
+            // pagination, pola yang sama dengan GET /api/collab.
+            $pageRaw = $_GET['page'] ?? null;
+            $limitRaw = $_GET['limit'] ?? null;
+            if ($pageRaw !== null || $limitRaw !== null) {
+                $page = $pageRaw !== null && filter_var($pageRaw, FILTER_VALIDATE_INT) !== false
+                    ? max(1, (int) $pageRaw)
+                    : 1;
+                $limit = $limitRaw !== null && filter_var($limitRaw, FILTER_VALIDATE_INT) !== false
+                    ? min(50, max(1, (int) $limitRaw))
+                    : 10;
+                $total = PostModel::countVisiblePosts();
+                $posts = PostModel::getAll($userId, $limit, ($page - 1) * $limit);
+                Response::json($posts, 200, 'Berhasil mendapatkan semua Postingan!', true, [
+                    'page' => $page,
+                    'limit' => $limit,
+                    'total' => $total,
+                    'total_pages' => (int) ceil($total / $limit),
+                ]);
+            }
+
             $posts = PostModel::getAll($userId);
 
             if (empty($posts)) {
-                Response::json([], 404, 'Belum ada postingan saat ini!', false);
+                Response::json([], 200, 'Belum ada postingan saat ini!', true);
             }
 
             Response::json($posts, 200, 'Berhasil mendapatkan semua Postingan!', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -146,7 +183,44 @@ class PostController
 
             Response::json($post, 200, 'Post Detail added!', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
+        }
+    }
+
+    /**
+     * Handler untuk POST /api/posts/:postId/view (Record View)
+     * Menambah view_count sebanyak 1. Dipanggil client-side sekali setiap
+     * kali halaman detail post dibuka. Memerlukan AuthMiddleware (login wajib).
+     *
+     * @param  array<string, string> $params Path parameters dari Router (postId)
+     * @return void
+     */
+    public static function recordView(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $postId = $params['postId'] ?? '';
+
+            if ($postId === '') {
+                Response::json(null, 400, 'Post ID diperlukan', false);
+            }
+
+            $viewCount = PostModel::recordView($postId, $userId);
+
+            if ($viewCount === null) {
+                Response::json(null, 404, 'Post Not found!', false);
+            }
+
+            Response::json(['view_count' => $viewCount], 200, 'View recorded', true);
+        } catch (Throwable $e) {
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -185,19 +259,16 @@ class PostController
                 }
             }
 
-            $title          = trim((string)($body['title'] ?? ''));
             $description    = trim((string)($body['description'] ?? ''));
             $portfolioType  = trim((string)($body['portfolio_type'] ?? $body['portfolioType'] ?? 'link'));
             $externalUrlRaw = $body['external_url'] ?? $body['externalUrl'] ?? null;
             $mediaUrls      = $body['media_urls'] ?? $body['mediaUrls'] ?? null;
             $mediaPublicIds = $body['media_public_ids'] ?? $body['mediaPublicIds'] ?? [];
 
-            // Validasi field wajib sesuai Express baseline (title, description, externalUrl required)
-            if (
-                $title === '' ||
-                $description === '' ||
-                $externalUrlRaw === null || trim((string)$externalUrlRaw) === ''
-            ) {
+            // Yang wajib hanya description — itu satu-satunya field
+            // yang diedit dari aplikasi. externalUrl opsional: kalau
+            // tidak dikirim, nilai lama dipertahankan (lihat di bawah).
+            if ($description === '') {
                 Response::json(null, 400, 'Tiap kolom wajib di isi!', false);
             }
 
@@ -205,12 +276,16 @@ class PostController
             if (is_array($mediaUrls) && is_array($mediaPublicIds) && count($mediaPublicIds) > 0 && count($mediaUrls) !== count($mediaPublicIds)) {
                 Response::json(null, 400, 'Count of mediaUrls and mediaPublicIds must be same!', false);
             }
+            // Media harus berasal dari Cloudinary sendiri (folder underflow)
+            if (is_array($mediaUrls) && count($mediaUrls) > 0) {
+                UploadController::assertValidMedia(array_values($mediaUrls), is_array($mediaPublicIds) ? array_values($mediaPublicIds) : []);
+            }
 
-            $externalUrl = trim((string)$externalUrlRaw);
+            $externalUrl = $externalUrlRaw === null ? null : trim((string)$externalUrlRaw);
 
             // 1. Cek ownership dulu (mirip Express: findById lalu compare userId)
             $pdo = getDB();
-            $checkStmt = $pdo->prepare("SELECT user_id FROM public_posts WHERE id = :id LIMIT 1");
+            $checkStmt = $pdo->prepare("SELECT user_id, external_url, portfolio_type FROM public_posts WHERE id = :id AND deleted_at IS NULL LIMIT 1");
             $checkStmt->execute([':id' => $postId]);
             $existing = $checkStmt->fetch();
 
@@ -223,12 +298,21 @@ class PostController
                 Response::json(null, 403, 'Bukan hak lu buat edit postingan ini!', false);
             }
 
+            // external_url / portfolio_type yang tidak dikirim berarti
+            // "pertahankan nilai lama" — aplikasi hanya mengirim
+            // description saat mengedit.
+            if ($externalUrl === null) {
+                $externalUrl = (string)($existing['external_url'] ?? '');
+            }
+            $portfolioTypeFinal = (isset($body['portfolio_type']) || isset($body['portfolioType']))
+                ? (in_array($portfolioType, ['link', 'images'], true) ? $portfolioType : 'link')
+                : (string)($existing['portfolio_type'] ?? 'link');
+
             // 2. Update via model
             $result = PostModel::update($postId, [
-                'title'            => $title,
                 'description'      => $description,
                 'external_url'     => $externalUrl,
-                'portfolio_type'   => in_array($portfolioType, ['link', 'images'], true) ? $portfolioType : 'link',
+                'portfolio_type'   => $portfolioTypeFinal,
                 'media_urls'       => is_array($mediaUrls) ? array_values($mediaUrls) : null,
                 'media_public_ids' => is_array($mediaPublicIds) ? array_values($mediaPublicIds) : [],
             ]);
@@ -237,9 +321,13 @@ class PostController
                 Response::json(null, 404, 'Postingan tidak ditemukan!', false);
             }
 
+            // AI Moderator: konten berubah, antrekan penilaian ulang.
+            AiModerationService::enqueue('post', (string) $postId, 'edit');
+
             Response::json($result, 200, 'Berhasil diupdate!', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -289,7 +377,8 @@ class PostController
 
             Response::json($post, 200, 'Postingan Berhasil dihapus!', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -327,9 +416,31 @@ class PostController
 
             LikeModel::createLike($postId, $userId);
 
+            // Notifikasi untuk pemilik post — kegagalan di sini tidak
+            // boleh menggagalkan like-nya sendiri.
+            try {
+                $notifRow = NotificationModel::createLikeNotification($postId, $post['user_id'], $userId);
+                if ($notifRow) {
+                    $apiRow = NotificationModel::findApiRow($notifRow['id']);
+                    if ($apiRow) {
+                        Realtime::publishNotification($post['user_id'], $apiRow);
+                    }
+                }
+            } catch (Throwable) {
+            }
+
+            // Angka like/komen terbaru -> semua browser yang terhubung
+            // (best-effort; kalau server realtime mati, polling yang cover).
+            try {
+                $counts = PostModel::getCounts($postId);
+                Realtime::publishPostStats($postId, $counts['likes'], $counts['commentCount']);
+            } catch (Throwable) {
+            }
+
             Response::json(null, 201, 'Post berhasil di-like', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -360,11 +471,36 @@ class PostController
                 Response::json(null, 404, 'Post not found', false);
             }
 
+            // Cari dulu notifikasinya (id + penerima) sebelum dihapus,
+            // supaya penghapusan bisa di-push ke socket pemilik post.
+            $notifRow = null;
+            try {
+                $notifRow = NotificationModel::findLikeNotification($postId, $userId);
+            } catch (Throwable) {
+            }
+
             LikeModel::deleteLike($postId, $userId);
+
+            // Like dibatalkan -> notifikasinya ikut hilang.
+            try {
+                NotificationModel::deleteLikeNotification($postId, $userId);
+                if ($notifRow) {
+                    Realtime::publishNotificationRemoved($notifRow['user_id'], $notifRow['id']);
+                }
+            } catch (Throwable) {
+            }
+
+            // Angka like/komen terbaru -> semua browser yang terhubung.
+            try {
+                $counts = PostModel::getCounts($postId);
+                Realtime::publishPostStats($postId, $counts['likes'], $counts['commentCount']);
+            } catch (Throwable) {
+            }
 
             Response::json(null, 200, 'Like berhasil dihapus', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -413,9 +549,35 @@ class PostController
 
             $commentData = CommentModel::create($postId, $userId, $content);
 
+            // Notifikasi untuk pemilik post — kegagalan di sini tidak
+            // boleh menggagalkan komennya sendiri.
+            try {
+                $notifRow = NotificationModel::createCommentNotification($postId, $commentData['id'], $post['user_id'], $userId);
+                if ($notifRow) {
+                    $apiRow = NotificationModel::findApiRow($notifRow['id']);
+                    if ($apiRow) {
+                        Realtime::publishNotification($post['user_id'], $apiRow);
+                    }
+                }
+            } catch (Throwable) {
+            }
+
+            // Angka like/komen terbaru -> semua browser yang terhubung.
+            try {
+                $counts = PostModel::getCounts($postId);
+                Realtime::publishPostStats($postId, $counts['likes'], $counts['commentCount']);
+            } catch (Throwable) {
+            }
+
+            // AI Moderator: antrekan komentar baru untuk diperiksa.
+            if (is_array($commentData) && !empty($commentData['id'])) {
+                AiModerationService::enqueue('comment', (string) $commentData['id'], 'new_content');
+            }
+
             Response::json($commentData, 200, 'Success create comment!', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -446,11 +608,12 @@ class PostController
                 Response::json(null, 404, 'Post not found', false);
             }
 
-            $comments = CommentModel::getByPostId($postId);
+            $comments = CommentModel::getByPostId($postId, $userId);
 
             Response::json($comments, 200, 'Success get comments', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 
@@ -485,11 +648,159 @@ class PostController
                 Response::json(null, 403, 'Bukan komentar milikmu', false);
             }
 
+            // Cari dulu notifikasinya (id + penerima) sebelum dihapus,
+            // supaya penghapusan bisa di-push ke socket pemilik post.
+            $notifRow = null;
+            try {
+                $notifRow = NotificationModel::findCommentNotification($commentId);
+            } catch (Throwable) {
+            }
+
             CommentModel::delete($commentId);
+
+            // Komen dihapus -> notifikasinya ikut hilang.
+            try {
+                NotificationModel::deleteCommentNotification($commentId);
+                if ($notifRow) {
+                    Realtime::publishNotificationRemoved($notifRow['user_id'], $notifRow['id']);
+                }
+            } catch (Throwable) {
+            }
+
+            // Angka like/komen terbaru -> semua browser yang terhubung.
+            try {
+                $counts = PostModel::getCounts($comment['post_id']);
+                Realtime::publishPostStats($comment['post_id'], $counts['likes'], $counts['commentCount']);
+            } catch (Throwable) {
+            }
 
             Response::json($comment, 200, 'Comment berhasil dihapus!', true);
         } catch (Throwable $e) {
-            Response::json(null, 500, $e->getMessage(), false);
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
+        }
+    }
+    /**
+     * Handler untuk POST /api/comments/:commentId/like
+     * Menyukai sebuah komentar. Memerlukan AuthMiddleware (login wajib).
+     * Tidak ada notifikasi untuk like komentar (di luar scope).
+     *
+     * @param  array<string, string> $params Path parameters dari Router (commentId)
+     * @return void
+     */
+    public static function likeComment(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $commentId = $params['commentId'] ?? '';
+
+            if ($commentId === '') {
+                Response::json(null, 400, 'Comment ID diperlukan', false);
+            }
+
+            $comment = CommentModel::findById($commentId);
+            if (!$comment) {
+                Response::json(null, 404, 'Comment not found!', false);
+            }
+
+            $existingLike = CommentLikeModel::findLike($commentId, $userId);
+            if ($existingLike) {
+                Response::json(null, 400, 'Sudah like komentar ini', false);
+            }
+
+            CommentLikeModel::createLike($commentId, $userId);
+
+            // Like komen -> notifikasi untuk penulis komen (best-effort;
+            // tidak boleh menggagalkan like-nya sendiri).
+            try {
+                $notifRow = NotificationModel::createCommentLikeNotification($commentId, $comment['user_id'], $userId);
+                if ($notifRow) {
+                    $apiRow = NotificationModel::findApiRow($notifRow['id']);
+                    if ($apiRow) {
+                        Realtime::publishNotification($comment['user_id'], $apiRow);
+                    }
+                }
+            } catch (Throwable) {
+            }
+
+            // Jumlah like komen terbaru -> semua browser yang terhubung
+            // (best-effort; kalau server realtime mati, polling yang cover).
+            try {
+                $likes = CommentLikeModel::countByCommentId($commentId);
+                Realtime::publishCommentStats($commentId, $comment['post_id'], $likes);
+            } catch (Throwable) {
+            }
+
+            Response::json(null, 201, 'Komentar berhasil di-like', true);
+        } catch (Throwable $e) {
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
+        }
+    }
+
+    /**
+     * Handler untuk DELETE /api/comments/:commentId/unlike
+     * Menghapus like dari komentar. Memerlukan AuthMiddleware (login wajib).
+     *
+     * @param  array<string, string> $params Path parameters dari Router (commentId)
+     * @return void
+     */
+    public static function unlikeComment(array $params = []): void
+    {
+        try {
+            $userId = $GLOBALS['user']['id'] ?? null;
+
+            if (!$userId) {
+                Response::json(null, 401, 'Unauthorized', false);
+            }
+
+            $commentId = $params['commentId'] ?? '';
+
+            if ($commentId === '') {
+                Response::json(null, 400, 'Comment ID diperlukan', false);
+            }
+
+            $comment = CommentModel::findById($commentId);
+            if (!$comment) {
+                Response::json(null, 404, 'Comment not found!', false);
+            }
+
+            // Cari dulu notifikasinya (id + penerima) sebelum dihapus,
+            // supaya penghapusan bisa di-push ke socket penulis komen.
+            $notifRow = null;
+            try {
+                $notifRow = NotificationModel::findCommentLikeNotification($commentId, $userId);
+            } catch (Throwable) {
+            }
+
+            CommentLikeModel::deleteLike($commentId, $userId);
+
+            // Like dibatalkan -> notifikasinya ikut hilang.
+            try {
+                NotificationModel::deleteCommentLikeNotification($commentId, $userId);
+                if ($notifRow) {
+                    Realtime::publishNotificationRemoved($notifRow['user_id'], $notifRow['id']);
+                }
+            } catch (Throwable) {
+            }
+
+            // Jumlah like komen terbaru -> semua browser yang terhubung
+            // (best-effort; kalau server realtime mati, polling yang cover).
+            try {
+                $likes = CommentLikeModel::countByCommentId($commentId);
+                Realtime::publishCommentStats($commentId, $comment['post_id'], $likes);
+            } catch (Throwable) {
+            }
+
+            Response::json(null, 200, 'Like komentar berhasil dihapus', true);
+        } catch (Throwable $e) {
+            error_log('[SERVER ERROR] ' . $e->getMessage());
+            Response::json(null, 500, 'Terjadi kesalahan pada server. Silakan coba lagi.', false);
         }
     }
 }
