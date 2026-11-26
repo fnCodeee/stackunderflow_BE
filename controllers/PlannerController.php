@@ -334,10 +334,11 @@ class PlannerController
             // Tanpa ini, drag yang cuma pindah lane (hari sama) tidak
             // tersimpan sama sekali, dan drag pindah hari pun kehilangan
             // urutan vertikalnya karena ORDER BY pakai position lama.
+            // Position murni urutan tampil, bukan isi task, jadi member
+            // mana pun boleh mengubahnya saat me-reorder board — kalau
+            // tetap pakai $canMove, drag seorang member yang menggeser
+            // task member lain bakal 403 dan nge-revert seluruh drag.
             if (array_key_exists('position', $body)) {
-                if (!$canMove) {
-                    Response::json(null, 403, 'Only the assignee, the owner, or a PM can reorder this task', false);
-                }
                 $fields['position'] = max(0, (int) $body['position']);
             }
 
