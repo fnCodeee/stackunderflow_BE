@@ -275,7 +275,7 @@ class PlannerModel
         if ($fields === []) {
             return;
         }
-        $allowed = ['title', 'section_id', 'assignee_id', 'follows_task_id', 'gap_days', 'done_at', 'done_by', 'start_date', 'icon', 'blocks_json', 'pencilled'];
+        $allowed = ['title', 'section_id', 'assignee_id', 'follows_task_id', 'gap_days', 'done_at', 'done_by', 'start_date', 'icon', 'blocks_json', 'pencilled', 'position'];
         $sets = [];
         $params = [':id' => $taskId];
         foreach ($fields as $key => $value) {

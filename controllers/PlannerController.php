@@ -329,6 +329,18 @@ class PlannerController
                 $fields['pencilled'] = !empty($body['pencilled']) ? 1 : 0;
             }
 
+            // Urutan vertikal (lane) di board: disimpan supaya pill
+            // tidak lompat sendiri ke lane lama pas board di-refresh.
+            // Tanpa ini, drag yang cuma pindah lane (hari sama) tidak
+            // tersimpan sama sekali, dan drag pindah hari pun kehilangan
+            // urutan vertikalnya karena ORDER BY pakai position lama.
+            if (array_key_exists('position', $body)) {
+                if (!$canMove) {
+                    Response::json(null, 403, 'Only the assignee, the owner, or a PM can reorder this task', false);
+                }
+                $fields['position'] = max(0, (int) $body['position']);
+            }
+
             if (array_key_exists('done', $body)) {
                 if (!$canMove) {
                     Response::json(null, 403, 'Only the assignee, the owner, or a PM can complete this task', false);
